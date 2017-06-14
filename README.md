@@ -16,7 +16,7 @@ Installation
 1. Run `install-deps.sh` (or `install-deps.bat` on windows).
 1. Run `build.sh` or (or `build.bat` on windows).
 1. Modify `etc/config.toml` for your installation.
-1. 🙈🙉🙊
+1. 
 
 REST APIs
 =========
@@ -73,9 +73,20 @@ limitations under the License.
 
 For any questions, please contact developer@tenta.io
 
+Credits
+=======
+
+We provide this API free to use on your site. We kindly ask that in return you show us some link love to https://tenta.com. Wed love to know how youre using it, so do let us know!
+
 Contributing
 ============
 
 We welcome contributions, feedback and plain old complaining. Feel free to open
 an issue or shoot us a message to developer@tenta.io. If you'd like to contribute,
 please open a pull request and send us an email to sign a contributor agreement.
+
+About Tenta
+===========
+
+This browser privacy test tool is brought to you by Team Tenta. Tenta is your [private, encrypted browser](https://tenta.com) that protects your data instead of selling. We're building a next-generation browser that combines all the privacy tools you need, including built-in OpenVPN. Everything is encrypted by default. That means your bookmarks, saved tabs, web history, web traffic, downloaded files, IP address and DNS. A truly incognito browser that's fast and easy.
+
