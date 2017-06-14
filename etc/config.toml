@@ -1,0 +1,55 @@
+# Full path to use for LevelDb Database
+databasepath="/etc/nsnitch/responses.db"
+# Number of seconds to cache records for
+databasettl=300
+
+# Path from which to include domain configs
+includepath="/etc/nsnitch/conf.d"
+
+# Information about this node
+nodecity="Somecity"
+nodestate="Somestate"
+nodecountry="United States"
+nodecountryiso="US"
+nodelatitude=0.0
+nodelongitude=0.0
+nodeorg="Datacenter Name"
+nodeas="0"
+nodeisp="Local Network"
+nodetimezone="America/Los_Angeles"
+
+# The system mode to use for redirection
+# UUID Mode genenrates UUIDs as the subdomains
+#redirectmode="uuid"
+# wordlist mode generates plausible subdomains from wordlist
+redirectmode="wordlist"
+wordlistpath="/etc/nsnitch/words.txt"
+
+# Port mapping
+httpport=80
+httpsport=443
+dnsudpport=53
+dnstcpport=53
+dnstlsport=853
+
+# Domains to enable CORS for
+corsdomains=["tenta.io", "tenta.com"]
+
+
+# List of DNS Blacklists to test in the blacklist api
+blacklists=["bogons.cymru.com","zen.spamhaus.org","socks.dnsbl.sorbs.net","dnsbl-1.uceprotect.net"]
+blacklistttl=86400
+
+# MaxMind Key for GeoIP download
+maxmindkey="LICENSE_KEY"
+geodbpath="/etc/nsnitch/geo.db"
+
+# Lookup Credentials allow for Executing Lookups
+[lookupcreds]
+"ABC"="123"
+"XYZ"="456"
+
+# Admin Credentials allow for Controlling NSNitch
+[admincreds]
+"ABC"="789"
+"XYZ"="012"

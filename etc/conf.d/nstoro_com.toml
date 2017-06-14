@@ -1,0 +1,5 @@
+hostname="nstoro.com"
+ipv4="127.0.0.1"
+certfile="/etc/nsnitch/certs/star_nstoro_com.chained.crt"
+keyfile="/etc/nsnitch/certs/star_nstoro_com.key"
+nameservers=["1.2.3.4", "5.6.7.8"]
