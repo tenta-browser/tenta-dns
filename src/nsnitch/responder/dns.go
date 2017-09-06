@@ -23,17 +23,18 @@
 package responder
 
 import (
-	"fmt"
-	"net"
-	"time"
-	"regexp"
-	"strconv"
 	"crypto/tls"
 	"encoding/json"
-	"github.com/miekg/dns"
-	"github.com/leonelquinteros/gorand"
+	"fmt"
+	"net"
 	"nsnitch/common"
 	"nsnitch/runtime"
+	"regexp"
+	"strconv"
+	"time"
+
+	"github.com/leonelquinteros/gorand"
+	"github.com/miekg/dns"
 )
 
 type dnsHandler func(w dns.ResponseWriter, r *dns.Msg)
@@ -41,32 +42,32 @@ type dnsHandler func(w dns.ResponseWriter, r *dns.Msg)
 func DNSServer(cfg *runtime.Config, rt *runtime.Runtime) {
 
 	for _, d := range cfg.Domains {
-		hndl := handleSnitch(cfg, rt, d.HostName)
+		//hndl := handleSnitch(cfg, rt, d.HostName)
 		if d.IPv4 != "" {
 			rt.AddService()
-			go serveDNS(cfg, rt, true, "udp", d.HostName, hndl)
+			go serveDNS(cfg, rt, true, "udp", d.HostName)
 			rt.AddService()
-			go serveDNS(cfg, rt, true, "tcp", d.HostName, hndl)
+			go serveDNS(cfg, rt, true, "tcp", d.HostName)
 			if d.CertFile != "" {
 				rt.AddService()
-				go serveDNS(cfg, rt, true, "tls", d.HostName, hndl)
+				go serveDNS(cfg, rt, true, "tls", d.HostName)
 			}
 		}
 		if d.IPv6 != "" {
 			rt.AddService()
-			go serveDNS(cfg, rt, false, "udp", d.HostName, hndl)
+			go serveDNS(cfg, rt, false, "udp", d.HostName)
 			rt.AddService()
-			go serveDNS(cfg, rt, false, "tcp", d.HostName, hndl)
+			go serveDNS(cfg, rt, false, "tcp", d.HostName)
 			if d.CertFile != "" {
 				rt.AddService()
-				go serveDNS(cfg, rt, false, "tls", d.HostName, hndl)
+				go serveDNS(cfg, rt, false, "tls", d.HostName)
 			}
 		}
 	}
 
 }
 
-func serveDNS(cfg *runtime.Config, rt *runtime.Runtime, v4 bool, net string, hostname string, hndl dnsHandler) {
+func serveDNS(cfg *runtime.Config, rt *runtime.Runtime, v4 bool, net string, hostname string) {
 	d := cfg.Domains[hostname]
 	var ip string
 	if v4 {
@@ -90,7 +91,7 @@ func serveDNS(cfg *runtime.Config, rt *runtime.Runtime, v4 bool, net string, hos
 		fmt.Printf("Started %s dns on %s for %s\n", net, addr, d.HostName)
 	}
 	fmt.Printf("Preparing %s dns on %s for %s\n", net, addr, d.HostName)
-	srv := &dns.Server{Addr: addr, Net: net, NotifyStartedFunc: notifyStarted, Handler: dns.HandlerFunc(hndl)}
+	srv := &dns.Server{Addr: addr, Net: net, NotifyStartedFunc: notifyStarted, Handler: dns.HandlerFunc(handleSnitch(cfg, rt, hostname, net))}
 
 	defer rt.OnFinished(func() {
 		srv.Shutdown()
@@ -138,19 +139,19 @@ func serveDNS(cfg *runtime.Config, rt *runtime.Runtime, v4 bool, net string, hos
 	}
 }
 
-func makeNodeLoc(cfg* runtime.Config) *runtime.GeoLocation {
+func makeNodeLoc(cfg *runtime.Config) *runtime.GeoLocation {
 	nodeloc := &runtime.GeoLocation{
 		Position: &runtime.Position{
-			Latitude: cfg.NodeLatitude,
+			Latitude:  cfg.NodeLatitude,
 			Longitude: cfg.NodeLongitude,
-			Radius: 10,
-			TimeZone: cfg.NodeTimeZone,
+			Radius:    10,
+			TimeZone:  cfg.NodeTimeZone,
 		},
 		ISP: &runtime.ISP{
-			ISP: cfg.NodeISP,
-			ASNumber: cfg.NodeAS,
+			ISP:            cfg.NodeISP,
+			ASNumber:       cfg.NodeAS,
 			ASOrganization: cfg.NodeISP,
-			Organization: cfg.NodeOrg,
+			Organization:   cfg.NodeOrg,
 		},
 	}
 	locString := cfg.NodeCountry
@@ -173,7 +174,7 @@ func makeNodeLoc(cfg* runtime.Config) *runtime.GeoLocation {
 	return nodeloc
 }
 
-func handleSnitch(cfg *runtime.Config, rt *runtime.Runtime, hostname string) dnsHandler {
+func handleSnitch(cfg *runtime.Config, rt *runtime.Runtime, hostname string, network string) dnsHandler {
 	d := cfg.Domains[hostname]
 	nodeloc := makeNodeLoc(cfg)
 	return func(w dns.ResponseWriter, r *dns.Msg) {
@@ -181,19 +182,22 @@ func handleSnitch(cfg *runtime.Config, rt *runtime.Runtime, hostname string) dns
 			v4       bool
 			serverIp dns.RR
 			//str       string
-			a	net.IP
+			a       net.IP
 			queried string
 			nettype string
 			rec     DNSTelemetry
 		)
 
+		if network == "tcp-tls" {
+			rec.TLSEnabled = true
+		}
 		tme := time.Now().Unix()
 		rec.RequestTime = uint64(tme)
 
-		if (r.MsgHdr.RecursionDesired) {
+		if r.MsgHdr.RecursionDesired {
 			rec.FlagRD = true
 		}
-		if (r.MsgHdr.CheckingDisabled) {
+		if r.MsgHdr.CheckingDisabled {
 			rec.FlagCD = true
 		}
 
@@ -216,7 +220,7 @@ func handleSnitch(cfg *runtime.Config, rt *runtime.Runtime, hostname string) dns
 			nettype = "tcp"
 			rt.Stats.Count("dns:queries:internal:tcp")
 		}
-		if (v4) {
+		if v4 {
 			rec.IPFamily = "v4"
 			rt.Stats.Count("dns:queries:internal:ipv4")
 		} else {
@@ -243,7 +247,7 @@ func handleSnitch(cfg *runtime.Config, rt *runtime.Runtime, hostname string) dns
 
 		//fmt.Printf("Query: %s\n", queried)
 
-		if ! dns.IsSubDomain(d.HostName, queried) {
+		if !dns.IsSubDomain(d.HostName, queried) {
 			fmt.Printf("Invalid subdomain for %s: %s\n", queried, d.HostName)
 			rt.Stats.Count("dns:queries:error:invalid_subdomain")
 			m.SetRcode(r, dns.RcodeNameError)
@@ -269,7 +273,7 @@ func handleSnitch(cfg *runtime.Config, rt *runtime.Runtime, hostname string) dns
 		// }
 
 		rec.Subnet = nil
-		var subnetquery* runtime.Query = nil
+		var subnetquery *runtime.Query = nil
 		for _, e := range r.Extra {
 			h := e.Header()
 			switch h.Rrtype {
@@ -285,7 +289,7 @@ func handleSnitch(cfg *runtime.Config, rt *runtime.Runtime, hostname string) dns
 					case dns.EDNS0NSID:
 						rec.NSIDEnabled = true
 						rt.Stats.Count("dns:queries:internal:nsid_enabled")
-						break;
+						break
 					case dns.EDNS0SUBNET:
 						rt.Stats.Count("dns:queries:internal:client_subnet")
 						sn := o.(*dns.EDNS0_SUBNET)
@@ -301,21 +305,21 @@ func handleSnitch(cfg *runtime.Config, rt *runtime.Runtime, hostname string) dns
 							cs.IPFamily = "v6"
 						}
 						rec.Subnet = cs
-						break;
+						break
 					case dns.EDNS0COOKIE:
 						rec.Cookie = true
 						rt.Stats.Count("dns:queries:internal:dns_cookie")
-						break;
+						break
 					case dns.EDNS0TCPKEEPALIVE:
 						rt.Stats.Count("dns:queries:internal:tcp_keepalive")
 						rec.KeepAlive = true
 						rec.KeepAliveTTL = uint(o.(*dns.EDNS0_TCP_KEEPALIVE).Timeout) * 100
-						break;
+						break
 					default:
 						fmt.Printf("Message has an OPT Option entry: %d\n", o.Option())
 						rt.Stats.Count("dns:queries:internal:unknown_option")
 						rec.ExtraEDNS0 += 1
-						break;
+						break
 					}
 				}
 				break
@@ -421,9 +425,9 @@ func handleSnitch(cfg *runtime.Config, rt *runtime.Runtime, hostname string) dns
 		}
 
 		// Write the DB record
-		if ! skipdb {
+		if !skipdb {
 			query := []byte("query/" + queried)
-			query = query[0:len(query)-1]
+			query = query[0 : len(query)-1]
 			if err := rt.DBPut(common.AddSuffix(query, runtime.KEY_NAME), query); err != nil {
 				fmt.Println("Error: Failed to save query name")
 				fmt.Println(err.Error())
@@ -442,7 +446,7 @@ func handleSnitch(cfg *runtime.Config, rt *runtime.Runtime, hostname string) dns
 			}
 			if subnetquery != nil {
 				subnetgeoresponse, err := subnetquery.Response()
-				if err == nil && (subnetgeoresponse.ISP.ASNumber != 0 || subnetgeoresponse.Location != ""){
+				if err == nil && (subnetgeoresponse.ISP.ASNumber != 0 || subnetgeoresponse.Location != "") {
 					rec.Subnet.SubnetLoc = subnetgeoresponse
 				} else {
 					rt.Stats.Count("dns:queries:error:subnetgeoresponse_failed")
