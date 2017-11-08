@@ -950,8 +950,8 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16) (*dns.
 	if q.CDFlagSet {
 		message.CheckingDisabled = true
 	}
-	/// if chain of trust is broken, there's no need for DO bit (islands of security)
-	message.SetEdns0(4096, *dnssecEnabled && q.chainOfTrustIntact)
+	/// send queries with DO flag, irrespective of the status of the chain of trust
+	message.SetEdns0(4096, *dnssecEnabled)
 	message.SetQuestion(object, uint16(subject))
 	/// aka, if it's not used in dig mode, don't request recursion
 	if *targetNS == "" {
