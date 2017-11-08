@@ -1,0 +1,42 @@
+# What type of server are we running
+servertype="nsnitch"
+
+# Information about this node
+[node]
+city="Somecity"
+state="Somestate"
+country="United States"
+countryiso="US"
+latitude=0.0
+longitude=0.0
+org="Datacenter Name"
+as=0
+isp="Local Network"
+timezone="UTC"
+
+# The system mode to use for redirection
+# UUID Mode genenrates UUIDs as the subdomains
+#redirectmode="uuid"
+# wordlist mode generates plausible subdomains from wordlist
+redirectmode="wordlist"
+wordlistpath="/etc/nsnitch/words.txt"
+
+# The list of domains to bind to
+[domaains]
+    [domains.domain1]
+    hostname="example.org"
+    ipv4="127.0.0.2"
+    nameservers=["1.2.3.4", "5.6.7.8", "9.10.11.12", "13.14.15.16"]
+    [domains.domain2]
+    hostname="example.com"
+    ipv4="127.0.0.1"
+    certfile="/etc/nsnitch/certs/star_nstoro_com.chained.crt"
+    keyfile="/etc/nsnitch/certs/star_nstoro_com.key"
+    nameservers=["1.2.3.4", "5.6.7.8"]
+
+# Domains to enable CORS for
+corsdomains=["tenta.io", "tenta.com"]
+
+# List of DNS Blacklists to test in the blacklist api
+blacklists=["bogons.cymru.com","zen.spamhaus.org","socks.dnsbl.sorbs.net","dnsbl-1.uceprotect.net"]
+blacklistttl=86400

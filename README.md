@@ -1,22 +1,40 @@
-NSnitch
-=======
+Tenta DNS
+=========
 
-Find out which name servers are snitching on you.
+![Tenta Gopher](logo.png?raw=true "Tenta Gopher")
 
-Provides a DNS server which records the IP address of requests made against
-it and then makes that IP available via a JSON API. Also provides lookups for
-Tor Node membership, DNS blacklist status and Geo data. We welcome people to
-use our hosted version on nstoro.com. Please see `APIs` for details.
+A full-fledged DNS solution, including DNSSEC and DNS-over-TLS
+
+Tenta DNS provides a DNS server suite comprising an authoritative DNS server, recursive DNS server, and NSnitch,
+which provides a DNS server capable of recording the IP address of requests made against
+it and then makes that IP available via a JSON API. Tenta DNS also provides lookups for
+Tor Node membership, DNS blacklist status and Geo data. Finally, Tenta DNS includes built-in
+BGP integration, offering single engine convenience for DNS anycasting. We welcome people to
+use our hosted versions of recursive resolver and NSnitch. Please see `Usage`,
+for details on how to set Tenta DNS as your default DNS resolver, or `APIs`,
+for NSnitch REST API information.
 
 Contact: developer@tenta.io
+
+Usage
+=====
+
+Just want to use our hosted recursive resolver? We offer two options, using either [OpenNIC](https://opennic.org)
+root servers or the normal ICANN root servers.
+
+Our OpenNIC nameservers are at `99.192.182.100` and `66.244.159.100`
+
+ICANN nameservers are at `99.192.182.200` and `66.244.159.200`
+
+Please consult our [how-to page](https://tenta.com/dns-setup-guides), on setting up your DNS resolver.
 
 Installation
 ============
 
 1. Run `install-deps.sh` (or `install-deps.bat` on windows).
 1. Run `build.sh` or (or `build.bat` on windows).
-1. Modify `etc/config.toml` for your installation.
-1. 
+1. Modify `etc/config.toml` and `etc\conf.d\*.toml` for your installation.
+1. 🙈🙉🙊
 
 REST APIs
 =========
@@ -38,11 +56,11 @@ instead of a redirect.
 * `blacklist/{IP}`: DNS blacklist info for the specified IP address. Requires auth.
 * `stats`: Work in Progress. Server performance information.
 
-Explanation of DNS Probe
-========================
+Explanation of NSnitch DNS Probe
+================================
 
 In addition to the REST APIs, core functionality relies upon DNS lookups. After creating glue records pointing
-`ns1.nstoro.com` and `ns2.nstoro.com` to the IP(s) of a NSNitch server.
+`ns1.nstoro.com` and `ns2.nstoro.com` to the IP(s) of a Tenta DNS server.
 
 1. From javascript, load nstoro.com/api/v1/randomizer, it will redirect to abc123.nstoro.com/api/v1/report (where abc123 is a big random)
 1. Since the domain name is not cached (since it's totally random), the browser initiates a DNS lookup
@@ -54,15 +72,11 @@ In addition to the REST APIs, core functionality relies upon DNS lookups. After 
 External Dependencies
 =====================
 
-The `words.txt` is from http://dreamsteep.com/projects/the-english-open-word-list.html
+We rely on lots of excellent open source libraries, including [miekg/dns](https://github.com/miekg/dns) and
+[osrg/gobgp](https://github.com/osrg/gobgp), as well as many others. For a complete list of our dependencies and required notification,
+please take a look at [NOTICES.md](NOTICES.md)
 
-As per that license, please note:
-
-   UK Advanced Cryptics Dictionary Licensing Information:
-   
-   Copyright © J Ross Beresford 1993-1999. All Rights Reserved. The following restriction is placed on the use of this publication: if the UK Advanced Cryptics Dictionary is used in a software package or redistributed in any form, the copyright notice must be prominently displayed and the text of this document must be included verbatim.
-   
-   There are no other restrictions: I would like to see the list distributed as widely as possible.
+The `words.txt` file used for random names in NSnitch is from [dreamsteep.com](http://dreamsteep.com/projects/the-english-open-word-list.html).
 
 License
 =======
@@ -79,12 +93,12 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 
-For any questions, please contact developer@tenta.io
+Please see [LICENSE](LICENSE) for more. For any questions, please contact developer@tenta.io
 
 Credits
 =======
 
-We provide this API free to use on your site. We kindly ask that in return you show us some link love to https://tenta.com. Wed love to know how youre using it, so do let us know!
+You're welcome to use the hosted version of our JSON APIs free on your site. We kindly ask that in return you show us some link love to https://tenta.com. We’d love to know how you’re using it, so do let us know!
 
 Contributing
 ============
@@ -96,5 +110,4 @@ please open a pull request and send us an email to sign a contributor agreement.
 About Tenta
 ===========
 
-This browser privacy test tool is brought to you by Team Tenta. Tenta is your [private, encrypted browser](https://tenta.com) that protects your data instead of selling. We're building a next-generation browser that combines all the privacy tools you need, including built-in OpenVPN. Everything is encrypted by default. That means your bookmarks, saved tabs, web history, web traffic, downloaded files, IP address and DNS. A truly incognito browser that's fast and easy.
-
+Tenta DNS is brought to you by Team Tenta. Tenta is your [private, encrypted browser](https://tenta.com) that protects your data instead of selling it. We're building a next-generation browser that combines all the privacy tools you need, including built-in OpenVPN. Everything is encrypted by default. That means your bookmarks, saved tabs, web history, web traffic, downloaded files, IP address and DNS. A truly incognito browser that's fast and easy.

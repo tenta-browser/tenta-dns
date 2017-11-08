@@ -18,16 +18,12 @@
 ::#
 ::# install-deps.bat: Windows dependency installer
 
-ECHO OFF
+@ECHO OFF
 set GOPATH=%CD%
 
 echo Installing dependencies to %GOPATH%\pkg
 
-go get -u -v github.com/syndtr/goleveldb/leveldb
-go get -u -v github.com/miekg/dns
-go get -u -v github.com/leonelquinteros/gorand
-go get -u -v github.com/gorilla/mux
-go get -u -v github.com/BurntSushi/toml
-go get -u -v github.com/sasha-s/go-hll
-go get -u -v github.com/oschwald/maxminddb-golang
-go get -u -v github.com/dgryski/go-highway
+for /F "tokens=*" %%A in (deps.list) do (
+    echo Installing %%A
+    go get -u -v %%A
+)

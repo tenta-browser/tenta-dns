@@ -1,0 +1,8 @@
+servertype="recursor"
+
+opennic=true
+
+[domaains]
+    [domains.nameinspector]
+    hostname="dns.tenta.io"
+    ipv4="127.0.0.1"

@@ -23,4 +23,4 @@ GOPATH=`pwd`
 
 echo "Compiling to $GOPATH/bin"
 
-go install -v nsnitch
+go install -v tenta-dns

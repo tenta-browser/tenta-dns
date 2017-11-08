@@ -1,4 +1,5 @@
 #!/bin/bash
+
 # NSnitch DNS Server
 #
 #    Copyright 2017 Tenta, LLC
@@ -23,11 +24,11 @@ GOPATH=`pwd`
 
 echo "Installing dependencies to $GOPATH/pkg"
 
-go get -u -v github.com/syndtr/goleveldb/leveldb
-go get -u -v github.com/miekg/dns
-go get -u -v github.com/leonelquinteros/gorand
-go get -u -v github.com/gorilla/mux
-go get -u -v github.com/BurntSushi/toml
-go get -u -v github.com/sasha-s/go-hll
-go get -u -v github.com/oschwald/maxminddb-golang
-go get -u -v github.com/dgryski/go-highway
+oldifs=$IFS
+IFS='
+'
+for line in `cat ./deps.list`; do
+    echo "Installing $line"
+    go get -u -v $line
+done
+IFS=$oldifs

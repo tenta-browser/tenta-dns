@@ -3,53 +3,53 @@ databasepath="/etc/nsnitch/responses.db"
 # Number of seconds to cache records for
 databasettl=300
 
-# Path from which to include domain configs
+# Pull path to module configuration files
 includepath="/etc/nsnitch/conf.d"
 
-# Information about this node
-nodecity="Somecity"
-nodestate="Somestate"
-nodecountry="United States"
-nodecountryiso="US"
-nodelatitude=0.0
-nodelongitude=0.0
-nodeorg="Datacenter Name"
-nodeas="0"
-nodeisp="Local Network"
-nodetimezone="America/Los_Angeles"
-
-# The system mode to use for redirection
-# UUID Mode genenrates UUIDs as the subdomains
-#redirectmode="uuid"
-# wordlist mode generates plausible subdomains from wordlist
-redirectmode="wordlist"
-wordlistpath="/etc/nsnitch/words.txt"
-
-# Port mapping
-httpport=80
-httpsport=443
-dnsudpport=53
-dnstcpport=53
-dnstlsport=853
-
-# Domains to enable CORS for
-corsdomains=["tenta.io", "tenta.com"]
-
-
-# List of DNS Blacklists to test in the blacklist api
-blacklists=["bogons.cymru.com","zen.spamhaus.org","socks.dnsbl.sorbs.net","dnsbl-1.uceprotect.net"]
-blacklistttl=86400
-
 # MaxMind Key for GeoIP download
-maxmindkey="LICENSE_KEY"
-geodbpath="/etc/nsnitch/geo.db"
+# Only necessary if you're using an NSnitch module
+#maxmindkey="LICENSE_KEY"
+#geodbpath="/etc/nsnitch/geo.db"
 
-# Lookup Credentials allow for Executing Lookups
+# Url for Tor Updates
+torurl="https://check.torproject.org/exit-addresses"
+
+# Port Settings
+defaulthttpport=80
+defaulthttpsport=443
+defaultdnsudpport=53
+defaultdnstcpport=53
+defaultdnstlsport=853
+
+# bgp settings
+# Only necessary if you're using BGP
+#[peers]
+#    [peer.example]
+#    localas=396093
+#    localip="10.0.0.1"
+#    peeras=6500
+#    peerip="1.2.3.4"
+#    peerpassword="secret"
+
+# BGP Advertisement blocks
+# Only necessary if you're using BGP
+#[netblocks]
+#    [netblock]
+#    ip="10.1.0.0"
+#    netmask="24"
+    # set to true in order to force announcing this range, even if no
+    # configured mofule requires it
+    #force=false
+#    [netblocks]
+#    ip="192.168.1.0"
+#    netmask="24"
+
+# Lookup Credentials allow for Executing Lookups against the API
 [lookupcreds]
 "ABC"="123"
 "XYZ"="456"
 
-# Admin Credentials allow for Controlling NSNitch
+# Admin Credentials allow for Controlling Tenta DNS
 [admincreds]
 "ABC"="789"
 "XYZ"="012"

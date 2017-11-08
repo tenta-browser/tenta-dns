@@ -18,9 +18,9 @@
 ::#
 ::# build.bat: Windows build wrapper
 
-ECHO OFF
+@ECHO OFF
 set GOPATH=%CD%
 
 echo Compiling to %GOPATH%\bin
 
-go install -v nsnitch
+go install -v tenta-dns

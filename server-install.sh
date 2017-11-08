@@ -11,28 +11,34 @@ DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
 echo "Installing src to $GOPATH/src"
 
-rm -rf $GOPATH/src/nsnitch
-mkdir -p $GOPATH/src/nsnitch
-cp -R $DIR/src/nsnitch/* $GOPATH/src/nsnitch/
+rm -rf $GOPATH/src/tenta-dns
+mkdir -p $GOPATH/src/tenta-dns
+cp -R $DIR/src/tenta-dns/* $GOPATH/src/tenta-dns/
 
 echo "Installing dependencies to $GOPATH/pkg"
 
-go get -u -v github.com/syndtr/goleveldb/leveldb
-go get -u -v github.com/miekg/dns
-go get -u -v github.com/leonelquinteros/gorand
-go get -u -v github.com/gorilla/mux
-go get -u -v github.com/BurntSushi/toml
-go get -u -v github.com/sasha-s/go-hll
-go get -u -v github.com/oschwald/maxminddb-golang
-go get -u -v github.com/dgryski/go-highway
+oldifs=$IFS
+IFS='
+'
+for line in `cat ./deps.list`; do
+    echo "Installing $line"
+    go get -u -v $line
+done
+IFS=$oldifs
+
+echo "Installing gobgp"
+
+go get github.com/osrg/gobgp/gobgp
 
 echo "Compiling to $GOPATH/bin"
 
-go install -v nsnitch
+go install -v tenta-dns
 
 echo "Setting up configs"
 
-mkdir -p /etc/nsnitch/{conf.d,certs}
+mkdir -p /etc/nsnitch/conf.d
+mkdir -p /etc/nsnitch/certs
+mkdir -p /etc/nsnitch/geo.db
 
 cp $DIR/etc/words.txt /etc/nsnitch/words.txt
 if [ -f /etc/nsnitch/config.toml ]; then

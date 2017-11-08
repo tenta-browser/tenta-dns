@@ -1,0 +1,12 @@
+servertype="authority"
+
+# Full path to standard zone files
+zonespath='/etc/nsnitch/zones.d'
+
+[domaains]
+    [domains.ns1]
+    hostname="ns1.tenta.io"
+    ipv4="127.0.0.1"
+    [domains.ns2]
+    hostname="ns2.tenta.io"
+    ipv4="127.0.0.2"
