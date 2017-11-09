@@ -31,11 +31,11 @@ import (
 	"tenta-dns/log"
 	"time"
 
-	"github.com/dgryski/go-highway"
 	"github.com/sasha-s/go-hll"
 	"github.com/sirupsen/logrus"
 	"github.com/syndtr/goleveldb/leveldb/errors"
 	"github.com/syndtr/goleveldb/leveldb/util"
+	"github.com/tenta-browser/go-highway"
 )
 
 type EventType uint8

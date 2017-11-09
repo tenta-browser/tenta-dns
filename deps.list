@@ -5,7 +5,7 @@ github.com/gorilla/mux
 github.com/BurntSushi/toml
 github.com/sasha-s/go-hll
 github.com/oschwald/maxminddb-golang
-github.com/dgryski/go-highway
+github.com/tenta-browser/go-highway
 github.com/osrg/gobgp/api
 github.com/sirupsen/logrus
 github.com/mattn/go-colorable
