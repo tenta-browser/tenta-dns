@@ -99,16 +99,17 @@ const (
 )
 
 var (
-	request       = func() *string { t := ""; return &t }()    //flag.String("domain", "", "The domain to be looked up. Should be in fqdn form.")
-	setup         = func() *bool { t := false; return &t }()   //flag.Bool("setup", false, "Initialization of (quasi-)static data, like DNS root server addresses, database creation etc.")
-	clearCache    = func() *bool { t := false; return &t }()   //flag.Bool("clear", false, "Clear the resolver cache")
-	queryRecord   = func() *uint { t := uint(1); return &t }() //flag.Uint("record", 1, "Record type to query from the server (default is A) (see list for matching values for RR types)")
-	debugLevel    = func() *bool { t := false; return &t }()   //flag.Bool("debug", false, "If set, debug mode is on, full verbosity")
-	serverMode    = func() *bool { t := true; return &t }()    //flag.Bool("server", false, "Starts in server mode, listening for incoming dns queries")
-	targetNS      = func() *string { t := ""; return &t }()    //flag.String("ns", "", "Resolver to use in client mode")
-	targetNSName  = func() *string { t := ""; return &t }()    //flag.String("nshostname", "", "Resolver name to use in client mode")
-	certCache     = func() *string { t := ""; return &t }()    //flag.String("certcache", "", "Use the specified path for local certificate cache")
-	dnssecEnabled = func() *bool { t := false; return &t }()   //flag.Bool("dnssec", false, "starts server in dnssec enabled mode")
+	request              = func() *string { t := ""; return &t }()    //flag.String("domain", "", "The domain to be looked up. Should be in fqdn form.")
+	setup                = func() *bool { t := false; return &t }()   //flag.Bool("setup", false, "Initialization of (quasi-)static data, like DNS root server addresses, database creation etc.")
+	clearCache           = func() *bool { t := false; return &t }()   //flag.Bool("clear", false, "Clear the resolver cache")
+	queryRecord          = func() *uint { t := uint(1); return &t }() //flag.Uint("record", 1, "Record type to query from the server (default is A) (see list for matching values for RR types)")
+	debugLevel           = func() *bool { t := false; return &t }()   //flag.Bool("debug", false, "If set, debug mode is on, full verbosity")
+	serverMode           = func() *bool { t := true; return &t }()    //flag.Bool("server", false, "Starts in server mode, listening for incoming dns queries")
+	targetNS             = func() *string { t := ""; return &t }()    //flag.String("ns", "", "Resolver to use in client mode")
+	targetNSName         = func() *string { t := ""; return &t }()    //flag.String("nshostname", "", "Resolver name to use in client mode")
+	certCache            = func() *string { t := ""; return &t }()    //flag.String("certcache", "", "Use the specified path for local certificate cache")
+	dnssecEnabled        = func() *bool { t := false; return &t }()   //flag.Bool("dnssec", false, "starts server in dnssec enabled mode")
+	forgivingDNSSECCheck = true
 	/// TODO -- externalize as a config directive the ips of root servers (both iana and opennic)
 	opennicRoots    = []*rootServer{&rootServer{"ns2.opennic.glue", "161.97.219.84", "2001:470:4212:10:0:100:53:1"}}
 	ianaRoots       = []*rootServer{&rootServer{"b.root-servers.net", "192.228.79.201", "2001:500:84::b"}}
@@ -855,15 +856,11 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16) (*dns.
 	for q.chainOfTrustIntact && subject != dns.TypeDNSKEY {
 		currentLevel := inferCurrentLevel(object, subject)
 		/// root zone is level 1
-		currentLevelInt := 1
-		if currentLevel != "." {
-			currentLevelInt += strings.Count(currentLevel, ".")
-		}
 		q.debug("performing dnssec query.\n")
 		dsr, _, e := q.simpleResolve(currentLevel, target, dns.TypeDNSKEY)
 		//q.debug("DNSSEC query:\n%s\n", dsr.String())
 		if e != nil {
-			if currentLevelInt == 1 {
+			if forgivingDNSSECCheck {
 				q.chainOfTrustIntact = false
 				break
 			}
@@ -902,8 +899,10 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16) (*dns.
 		/// error is active only when no records are returned
 		q.debug("Got %d DS records from cache.\n", len(pubDS))
 		if e != nil {
-			/// resume
-			/// take no chances, chain of trust is declared as intact, DS records should be available, don't open a door to a mitm.
+			if forgivingDNSSECCheck {
+				q.setChainOfTrust(false)
+				break
+			}
 			return nil, 0, newError(errorCacheMiss, severityMajor, "cannot fetch DS records [%s]", e.String())
 		}
 		for _, rr := range pubDS {
@@ -915,7 +914,7 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16) (*dns.
 		}
 		/// if dnskeys are provided but can't authenticate them by parent ds-es, that smells funny and should bail, as per rfc suggestion
 		if numDSMatched == 0 {
-			if currentLevelInt == 1 {
+			if forgivingDNSSECCheck {
 				q.setChainOfTrust(false)
 				break
 			}
@@ -927,11 +926,15 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16) (*dns.
 		_, e = q.storeCache(q.provider, currentLevel, krr)
 		if e != nil {
 			/// this constitues a less than fatal error, which for this first round breaks normal flow just the same
+			if forgivingDNSSECCheck {
+				q.setChainOfTrust(false)
+				break
+			}
 			return nil, 0, newError(errorCacheWriteError, severityMajor, "cannot save DNSKEY in cache [%s]", e.String())
 		}
 		/// next up is: validating current DNSKEY records via RRSIG
 		if e := q.validateSignatures(k, dsr); e != nil {
-			if currentLevelInt == 1 {
+			if forgivingDNSSECCheck {
 				q.setChainOfTrust(false)
 				break
 			}
@@ -991,20 +994,19 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16) (*dns.
 
 	for q.chainOfTrustIntact && subject != dns.TypeDNSKEY {
 		currentLevel := inferCurrentLevel(object, subject)
-		currentLevelInt := 1
-		if currentLevel != "." {
-			currentLevelInt += strings.Count(currentLevel, ".")
-		}
 		cachedKeys, _, e := q.retrieveCache(q.provider, currentLevel, dns.TypeDNSKEY)
 		if e != nil {
 			/// as argued in the dnskey validation phase, take no chances
 			/// either dnskeys missing from server altogether (very bad) or missing from cache (slightly bad)
-			q.setChainOfTrust(false)
+			if forgivingDNSSECCheck {
+				q.setChainOfTrust(false)
+				break
+			}
 			return nil, 0, newError(errorCacheMiss, severityMajor, "cannot produce DNSKEY from cache [%s]", e.String())
 		}
 
 		if e := q.validateSignatures(sliceRRtoDNSKEY(cachedKeys), reply); e != nil {
-			if currentLevelInt == 1 {
+			if forgivingDNSSECCheck {
 				q.setChainOfTrust(false)
 				break
 			}
