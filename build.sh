@@ -24,3 +24,4 @@ GOPATH=`pwd`
 echo "Compiling to $GOPATH/bin"
 
 go install -v tenta-dns
+go install -v tenta-dns/stresser
