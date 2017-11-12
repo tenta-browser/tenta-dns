@@ -110,6 +110,7 @@ var (
 	certCache            = func() *string { t := ""; return &t }()    //flag.String("certcache", "", "Use the specified path for local certificate cache")
 	dnssecEnabled        = func() *bool { t := false; return &t }()   //flag.Bool("dnssec", false, "starts server in dnssec enabled mode")
 	forgivingDNSSECCheck = true
+	preferredProtocol    = "tcp"
 	/// TODO -- externalize as a config directive the ips of root servers (both iana and opennic)
 	opennicRoots    = []*rootServer{&rootServer{"ns2.opennic.glue", "161.97.219.84", "2001:470:4212:10:0:100:53:1"}}
 	ianaRoots       = []*rootServer{&rootServer{"b.root-servers.net", "192.228.79.201", "2001:500:84::b"}}
@@ -966,7 +967,7 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16) (*dns.
 	client := new(dns.Client)
 
 	port := ""
-	setupDNSClient(client, &port, target, targetCap, false, q.provider)
+	setupDNSClient(client, &port, target, targetCap, preferredProtocol == "tcp", q.provider)
 
 	if targetCap == serverCapabilityUnknown {
 		go func() {
