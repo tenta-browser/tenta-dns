@@ -24,7 +24,7 @@ import (
 var (
 	ip      = flag.String("ip", "127.0.0.1", "IP address to stress")
 	port    = flag.Uint("port", 53, "Port to test")
-	tcp     = flag.Bool("tcp", true, "Whether to use TCP mode")
+	tcp     = flag.Bool("tcp", false, "Whether to use TCP mode")
 	tls     = flag.Bool("tls", false, "Whether to use TLS (implies -tcp)")
 	workers = flag.Uint("workers", 0, "Number of simultaneous test workers to run (0 => autoselect)")
 	quiet   = flag.Bool("quiet", false, "Don't produce any output to the terminal")
