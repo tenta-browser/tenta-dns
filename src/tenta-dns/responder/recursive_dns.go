@@ -117,7 +117,7 @@ var (
 	rootServers     = map[string][]*rootServer{"tenta": ianaRoots, "opennic": opennicRoots}
 	severityLiteral = []string{"Success", "Nuisance", "Major", "Fatal"}
 	logger          = newLogger()
-	logFile, _      = os.Create(resolveLogFile)
+	//logFile, _      = os.Create(resolveLogFile)
 	/// tools to check for incoming request duplication
 	// duplicationCheck = make(map[string]int)
 	// duplicationSync  = new(sync.Mutex)
@@ -316,7 +316,7 @@ func storeCache(provider, domain string, _recordLiteral interface{}) (time.Durat
 		retDuration += time.Now().Sub(lockwait)
 		for _, rr := range recordLiteral {
 			if a, ok := rr.(*dns.A); ok {
-				logger.debug("Trying also to store [%s]\n", fmt.Sprintf("%s.IN-ADDR.ARPA.\t%d\tIN\tPTR\t%s", a.A.String(), a.Hdr.Ttl, domain))
+				// logger.debug("Trying also to store [%s]\n", fmt.Sprintf("%s.IN-ADDR.ARPA.\t%d\tIN\tPTR\t%s", a.A.String(), a.Hdr.Ttl, domain))
 				ptr, err := dns.NewRR(fmt.Sprintf("%s.IN-ADDR.ARPA.\t%d\tIN\tPTR\t%s", a.A.String(), a.Hdr.Ttl, domain))
 				if err == nil {
 					ulteriorRR = append(ulteriorRR, ptr)
@@ -1676,6 +1676,34 @@ func getTrustedRootAnchors(l *logrus.Entry, provider string) error {
 	return nil
 }
 
+/// block until zone is transferred
+/// todo: validate rrs
+func transferRootZone(l *logrus.Entry, provider string) error {
+	t := new(dns.Transfer)
+	m := new(dns.Msg)
+	m.SetAxfr(".")
+	r, e := t.In(m, rootServers[provider][0].ipv4+":53")
+	if e != nil {
+		return fmt.Errorf("cannot execute zone transfer [%s]", e.Error())
+	}
+
+	for env := range r {
+		if env.Error != nil {
+			l.Infof("Zone transfer envelope error [%s]", env.Error.Error())
+			continue
+		}
+		for _, rr := range env.RR {
+			switch rr.(type) {
+			case *dns.A, *dns.AAAA, *dns.NS:
+				storeCache(provider, rr.Header().Name, []dns.RR{rr})
+			}
+		}
+
+	}
+
+	return nil
+}
+
 func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime.Runtime) dnsHandler {
 	l := loggy
 	return func(w dns.ResponseWriter, m *dns.Msg) {
@@ -1787,6 +1815,10 @@ func ServeDNS(cfg runtime.RecursorConfig, rt *runtime.Runtime, v4 bool, net stri
 		if e := getTrustedRootAnchors(lg, provider); e != nil {
 			panic(fmt.Sprintf("Cannot obtain root trust anchors. [%v]\n", e))
 		}
+	}
+
+	if provider == dnsProviderOpennic {
+		transferRootZone(lg, provider)
 	}
 
 	pchan := make(chan interface{}, 1)
