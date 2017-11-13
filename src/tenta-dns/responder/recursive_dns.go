@@ -989,6 +989,7 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16) (*dns.
 		setupDNSClient(client, &port, target, targetCap, true, q.provider)
 		reply, rtt, err = client.Exchange(message, target+port)
 	}
+
 	if err != nil {
 		return nil, t, newError(errorCannotResolve, severityFatal, "simpleResolve failed. [%s]", err)
 	}
@@ -1088,9 +1089,29 @@ func contextIndependentValidateRR(rr dns.RR, domain string) bool {
 	return true
 }
 
+/// l is a non-nil reference
+func populateFallbackServers(l *[]string, rr []dns.RR) {
+	*l = make([]string, len(rr))
+	for _, r := range rr {
+		if a, ok := r.(*dns.A); ok {
+			*l = append(*l, a.A.String())
+		}
+	}
+}
+
+func insertFallbackServer(l *[]string, rr dns.RR) {
+	if *l == nil {
+		*l = make([]string, 0)
+	}
+	if a, ok := rr.(*dns.A); ok {
+		*l = append(*l, a.A.String())
+	}
+}
+
 /// this is the main loop for domain tokens -- returns one ip address or error
 func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsError) {
 	targetServer := rootServers[q.provider][0].ipv4
+	var fallbackServers []string
 	rangelimit := 0
 	/// first of all check the cache
 	/// check fqdn directly for the target recordtype
@@ -1124,6 +1145,9 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 		}
 		a := rr2[0].(*dns.A)
 		targetServer = a.A.String()
+		if len(rr2) > 1 {
+			populateFallbackServers(&fallbackServers, rr2[1:])
+		}
 		rangelimit = i
 		break
 	}
@@ -1150,6 +1174,9 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 					if arr != nil {
 						q.debug("Skipping step due to already cached value for [%s] -> [%s]\n", token, arr[0].(dns.RR).String())
 						targetServer = arr[0].(*dns.A).A.String()
+						if len(arr) > 1 {
+							populateFallbackServers(&fallbackServers, arr[1:])
+						}
 						continue
 					}
 				}
@@ -1276,8 +1303,11 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 					hasARecord = true
 					tw, _ = q.storeCache(q.provider, a.Header().Name, []dns.RR{a})
 					q.timeWasted += tw
+					/// resume
 					if targetServer == "" {
 						targetServer = a.A.String()
+					} else {
+						insertFallbackServer(&fallbackServers, a)
 					}
 					tw, _ = q.storeCache(q.provider, reply.Question[0].Name, []dns.RR{a})
 					q.timeWasted += tw
@@ -1408,7 +1438,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 			}
 
 			/// unfortunately answer/authority/additional combo could not lead directly to a next step IP
-			if targetServer == "" {
+			if targetServer == "" && len(fallbackServers) == 0 {
 				/// check every NS record, as it's possible that the one target host picked does not have a matching A in additional
 				if hasNSRecord {
 					for _, rr := range recordHolder {
@@ -1513,6 +1543,9 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 						a := arr[0].(*dns.A)
 						q.debug("Success from cache.\n")
 						targetServer = a.A.String()
+						if len(arr) > 1 {
+							populateFallbackServers(&fallbackServers, arr[1:])
+						}
 						break
 					}
 				}
@@ -1542,6 +1575,9 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 							continue
 						}
 						targetServer = _targetServer[0].(*dns.A).A.String()
+						if len(_targetServer) > 1 {
+							populateFallbackServers(&fallbackServers, _targetServer[1:])
+						}
 						q.debug("Sub-Resolve end >>>[%s]\n\n", tHost)
 						q.timeWasted += newq.timeWasted
 						/// the fear that the final A query will result in an unhandled CNAME makes this hack a life-saver
@@ -1569,13 +1605,24 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 	if *targetNS != "" {
 		targetServer = *targetNS
 	}
-	q.debug(">>> FINAL - Querying [%s] about [%s]<<<\n", targetServer, q.vanilla)
-	reply, tw, err := q.simpleResolve(q.vanilla, targetServer, q.record)
-	q.timeWasted += tw
-	if err != nil {
-		q.debug("Problem found:: [%s]\n", err.String())
-		if err.severity > severityNuisance {
-			return nil, err
+	finalTargetServers := make([]string, 0)
+	finalTargetServers = append(finalTargetServers, targetServer)
+	finalTargetServers = append(finalTargetServers, fallbackServers...)
+	var reply *dns.Msg
+	for ind, iteratedTargetServer := range finalTargetServers {
+		q.debug(">>> FINAL - Querying [%s] about [%s]<<<\n", iteratedTargetServer, q.vanilla)
+		reply, tw, err = q.simpleResolve(q.vanilla, iteratedTargetServer, q.record)
+		q.timeWasted += tw
+		if err != nil {
+			if ind < len(finalTargetServers)-1 {
+				continue
+			}
+			q.debug("Problem found:: [%s]\n", err.String())
+			if err.severity > severityNuisance {
+				return nil, err
+			}
+		} else {
+			break
 		}
 	}
 	q.debug("CD flag is [%v]\n", q.CDFlagSet)
