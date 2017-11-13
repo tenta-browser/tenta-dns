@@ -147,11 +147,12 @@ type queryParam struct {
 	logBuffer  *bytes.Buffer
 	timeWasted time.Duration
 	/// this starts with true, and once something goes sideways, it gets set permanently to false (modifies AD flag in client response, if CD not provided)
-	chainOfTrustIntact bool
-	spawnedFrom        *queryParam
-	ilog               *logrus.Entry       /// this is an instant log, it shows the message instantly
-	elog               nlog.EventualLogger /// this one will be shown if certain conditions are met
-	provider           string
+	chainOfTrustIntact    bool
+	spawnedFrom           *queryParam
+	ilog                  *logrus.Entry       /// this is an instant log, it shows the message instantly
+	elog                  nlog.EventualLogger /// this one will be shown if certain conditions are met
+	provider              string
+	authority, additional *[]dns.RR
 }
 
 /// 2 structs to help parse xml response from iana -- root zone trust anchor
@@ -169,7 +170,7 @@ type resultData struct {
 }
 
 func (q *queryParam) newContinationParam(rangeLimit int, serverHint string) *queryParam {
-	return &queryParam{q.vanilla, q.tokens, q.record, true, rangeLimit, serverHint, q.CDFlagSet, nil, q.history, q.logBuffer, 0, q.chainOfTrustIntact, q, q.ilog, q.elog, q.provider}
+	return &queryParam{q.vanilla, q.tokens, q.record, true, rangeLimit, serverHint, q.CDFlagSet, nil, q.history, q.logBuffer, 0, q.chainOfTrustIntact, q, q.ilog, q.elog, q.provider, q.authority, q.additional}
 }
 
 /// fork-join scheme for lookup continuations
@@ -275,7 +276,7 @@ func newQueryParam(vanilla string, record uint16, ilog *logrus.Entry, elog nlog.
 	for i := len(temp) - 1; i >= 0; i-- {
 		tokens[len(temp)-i-1] = strings.Join(temp[i:len(temp)], ".") + "."
 	}
-	return &queryParam{dns.Fqdn(vanilla), tokens, record, false, 0, "", false, nil, make([]historyItem, 0), new(bytes.Buffer), 0, true, nil, ilog, elog, provider}
+	return &queryParam{dns.Fqdn(vanilla), tokens, record, false, 0, "", false, nil, make([]historyItem, 0), new(bytes.Buffer), 0, true, nil, ilog, elog, provider, new([]dns.RR), new([]dns.RR)}
 }
 
 /// define it here for short term clarity
@@ -1607,8 +1608,18 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 		return res, err
 	}
 
+	/// if ANSWER section is empty, return last result (which is 0 answer, and 1 authority (SOA))
 	if len(resultRR) == 0 {
-		return nil, newError(errorUnresolvable, severityMajor, "cannot resolve [%s]", q.vanilla)
+		*q.authority = make([]dns.RR, len(reply.Ns))
+		*q.additional = make([]dns.RR, len(reply.Extra))
+		for i, rr := range reply.Ns {
+			(*q.authority)[i], _ = dns.NewRR(rr.String())
+		}
+		for i, rr := range reply.Extra {
+			(*q.additional)[i], _ = dns.NewRR(rr.String())
+		}
+		fmt.Printf("Copying [%d] records\n", len(reply.Ns)+len(reply.Extra))
+		return resultRR, nil
 	}
 
 	if q.result == nil {
@@ -1765,6 +1776,8 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 		}
 		response.Compress = true
 		response.Answer = answer
+		response.Ns = *qp.authority
+		response.Extra = *qp.additional
 		w.WriteMsg(response)
 	}
 }
