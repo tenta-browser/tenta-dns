@@ -13,30 +13,34 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"os"
 	"runtime"
 	"strconv"
 	"sync"
 	"tenta-dns/log"
 	"time"
-	"os"
 )
 
 var (
-	ip      = flag.String("ip", "127.0.0.1", "IP address to stress")
-	port    = flag.Uint("port", 53, "Port to test")
-	tcp     = flag.Bool("tcp", false, "Whether to use TCP mode")
-	tls     = flag.Bool("tls", false, "Whether to use TLS (implies -tcp)")
-	workers = flag.Uint("workers", 0, "Number of simultaneous test workers to run (0 => autoselect)")
-	quiet   = flag.Bool("quiet", false, "Don't produce any output to the terminal")
-	verbose = flag.Bool("verbose", false, "Produce lots of output to the terminal (overrides the -quiet flag)")
-	limit   = flag.Uint("limit", 1000, "How many domain names to use in the test (max 1000000)")
-	errfile = flag.String("errfile", "", "If specified, write errors to this file")
+	ip       = flag.String("ip", "127.0.0.1", "IP address to stress")
+	port     = flag.Uint("port", 53, "Port to test")
+	tcp      = flag.Bool("tcp", false, "Whether to use TCP mode")
+	tls      = flag.Bool("tls", false, "Whether to use TLS (implies -tcp)")
+	workers  = flag.Uint("workers", 0, "Number of simultaneous test workers to run (0 => autoselect)")
+	quiet    = flag.Bool("quiet", false, "Don't produce any output to the terminal")
+	verbose  = flag.Bool("verbose", false, "Produce lots of output to the terminal (overrides the -quiet flag)")
+	limit    = flag.Uint("limit", 1000, "How many domain names to use in the test (max 1000000)")
+	errfile  = flag.String("errfile", "", "If specified, write errors to this file")
+	printver = flag.Bool("version", false, "Print the version and exit")
 )
+
+var version string
 
 const alexaUrl = "https://s3.amazonaws.com/alexa-static/top-1m.csv.zip"
 
 func usage() {
-	fmt.Println("Tenta DNS Stresser")
+	fmt.Printf("Tenta DNS Stresser %s", version)
+	fmt.Println()
 	fmt.Println("Testing harness for Tenta DNS")
 	fmt.Println("Options:")
 	flag.PrintDefaults()
@@ -46,6 +50,11 @@ func main() {
 	log.SetLogLevel(logrus.InfoLevel)
 	flag.Usage = usage
 	flag.Parse()
+
+	if *printver {
+		fmt.Println(version)
+		os.Exit(0)
+	}
 
 	if *quiet {
 		log.SetLogLevel(logrus.FatalLevel)
@@ -105,7 +114,7 @@ func main() {
 type result struct {
 	name    string
 	time    time.Duration
-	msg string
+	msg     string
 	success bool
 }
 
@@ -247,6 +256,6 @@ func testRecords(r *csv.Reader, num uint, lg *logrus.Entry) {
 			lg.Errorf("Unable to write results file %s: %s", *errfile, err.Error())
 		}
 	}
-	lg.Infof("%d out of %d queries succeeded (%0.02f%%)", success, total, (float64(success) / float64(total))*100)
+	lg.Infof("%d out of %d queries succeeded (%0.02f%%)", success, total, (float64(success)/float64(total))*100)
 	wg.Wait()
 }
