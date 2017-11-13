@@ -1722,7 +1722,8 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 			return
 		}
 		/// check with rate limiter (and save to stats on false)
-		if network == "udp" && !rt.RateLimiter.CountAndPass(net.ParseIP(w.RemoteAddr().String())) {
+
+		if network == "udp" && !net.ParseIP(w.RemoteAddr().String()).IsLoopback() && !rt.RateLimiter.CountAndPass(net.ParseIP(w.RemoteAddr().String())) {
 			rt.Stats.Tick("resolver", "throttled")
 			rt.Stats.Card(StatsQueryLimitedIps, w.RemoteAddr().String())
 			return
