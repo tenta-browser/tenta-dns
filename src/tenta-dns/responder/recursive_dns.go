@@ -149,8 +149,8 @@ type queryParam struct {
 	/// this starts with true, and once something goes sideways, it gets set permanently to false (modifies AD flag in client response, if CD not provided)
 	chainOfTrustIntact    bool
 	spawnedFrom           *queryParam
-	ilog                  *logrus.Entry       /// this is an instant log, it shows the message instantly
-	elog                  nlog.EventualLogger /// this one will be shown if certain conditions are met
+	ilog                  *logrus.Entry        /// this is an instant log, it shows the message instantly
+	elog                  *nlog.EventualLogger /// this one will be shown if certain conditions are met
 	provider              string
 	authority, additional *[]dns.RR
 }
@@ -187,7 +187,7 @@ func (q *queryParam) debug(format string, args ...interface{}) {
 	// 	logger.debug(format, args...)
 
 	// }
-	q.elog.Queuef(format, args)
+	q.elog.Queuef(format, args...)
 }
 
 func (q *queryParam) setChainOfTrust(b bool) {
@@ -267,7 +267,7 @@ func (e *dnsError) String() string {
 
 /// assumes domain is valid (eg. tenta.io, asd.qwe.zxc.lol)
 /// dnssec is on by default
-func newQueryParam(vanilla string, record uint16, ilog *logrus.Entry, elog nlog.EventualLogger, provider string) *queryParam {
+func newQueryParam(vanilla string, record uint16, ilog *logrus.Entry, elog *nlog.EventualLogger, provider string) *queryParam {
 	if dns.IsFqdn(vanilla) {
 		vanilla = vanilla[:len(vanilla)-1]
 	}
@@ -1671,7 +1671,7 @@ func getTrustedRootAnchors(l *logrus.Entry, provider string) error {
 		}
 
 	} else if provider == "opennic" {
-		q := newQueryParam(".", dns.TypeDNSKEY, l, nil, provider)
+		q := newQueryParam(".", dns.TypeDNSKEY, l, new(nlog.EventualLogger), provider)
 		krr, e := q.doResolve(resolveMethodFinalQuestion)
 		if e != nil {
 			return fmt.Errorf("Cannot get opennic root keys. [%s]", e.Error())
@@ -1742,7 +1742,7 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 		rt.Stats.Card(StatsQueryUniqueIps, w.RemoteAddr().String())
 		startTime := time.Now()
 		l = l.WithField("domain", m.Question[0].Name)
-		elogger := nlog.EventualLogger{}
+		elogger := new(nlog.EventualLogger)
 		elogger.Queuef("%v -- STARTING NEW TOPLEVEL RESOLVE FOR [%s]", time.Now(), m.Question[0].Name)
 		qp := newQueryParam(m.Question[0].Name, m.Question[0].Qtype, l, elogger, provider)
 		qp.CDFlagSet = m.CheckingDisabled
