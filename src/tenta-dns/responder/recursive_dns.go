@@ -1693,7 +1693,9 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 		rt.Stats.Tick("dns", "queries:recursive")
 		rt.Stats.Card(StatsQueryUniqueIps, w.RemoteAddr().String())
 
-		if strings.Contains(r.Question[0].String(), "vkcache") || r.Question[0].Qtype == dns.TypeANY {
+		// This domain was seen to be polluting the query.
+		// TODO: Configurable fast-drop blacklist
+		if strings.Contains(r.Question[0].String(), "vkcache") {
 			return
 		}
 
