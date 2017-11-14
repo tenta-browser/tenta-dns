@@ -27,25 +27,19 @@ import (
 	"bytes"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/xml"
 	"fmt"
-	"io/ioutil"
+	"github.com/miekg/dns"
+	"github.com/muesli/cache2go"
+	"github.com/sirupsen/logrus"
 	"log"
 	"math/rand"
 	"net"
-	"net/http"
 	"os"
 	"reflect"
 	"strings"
-	"time"
-
-	"github.com/sirupsen/logrus"
-
-	"github.com/miekg/dns"
-	"github.com/muesli/cache2go"
-
 	nlog "tenta-dns/log"
-	runtime "tenta-dns/runtime"
+	"tenta-dns/runtime"
+	"time"
 )
 
 const (
@@ -1681,81 +1675,6 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 	return resultRR, nil
 }
 
-/// TODO -- externalize this call (to a truly side channel), and perhaps supply to the daemon via a config directive
-func getTrustedRootAnchors(l *logrus.Entry, provider string) error {
-	rootDS := make([]dns.RR, 0)
-
-	if provider == "tenta" {
-		data, err := http.Get(rootAnchorURL)
-		if err != nil {
-			return fmt.Errorf("Trusted root anchor obtain failed [%s]", err)
-		}
-		defer data.Body.Close()
-		rootCertData, err := ioutil.ReadAll(data.Body)
-		if err != nil {
-			return fmt.Errorf("Cannot read response data [%s]", err)
-		}
-
-		r := resultData{}
-		if err := xml.Unmarshal([]byte(rootCertData), &r); err != nil {
-			return fmt.Errorf("Problem during unmarshal. [%s]", err)
-		}
-
-		for _, dsData := range r.KeyDigest {
-			deleg := new(dns.DS)
-			deleg.Hdr = dns.RR_Header{Name: ".", Rrtype: dns.TypeDS, Class: dns.ClassINET, Ttl: 14400, Rdlength: 0}
-			deleg.Algorithm = dsData.Algorithm
-			deleg.Digest = dsData.Digest
-			deleg.DigestType = dsData.DigestType
-			deleg.KeyTag = dsData.KeyTag
-			rootDS = append(rootDS, deleg)
-		}
-
-	} else if provider == "opennic" {
-		q := newQueryParam(".", dns.TypeDNSKEY, l, new(nlog.EventualLogger), provider)
-		krr, e := q.doResolve(resolveMethodFinalQuestion)
-		if e != nil {
-			return fmt.Errorf("Cannot get opennic root keys. [%s]", e.Error())
-		}
-		for _, rr := range krr {
-			if k, ok := rr.(*dns.DNSKEY); ok {
-				rootDS = append(rootDS, k.ToDS(2))
-			}
-		}
-	}
-	storeCache(provider, ".", rootDS)
-
-	return nil
-}
-
-/// block until zone is transferred
-/// todo: validate rrs
-func transferRootZone(l *logrus.Entry, provider string) error {
-	t := new(dns.Transfer)
-	m := new(dns.Msg)
-	m.SetAxfr(".")
-	r, e := t.In(m, rootServers[provider][0].ipv4+":53")
-	if e != nil {
-		return fmt.Errorf("cannot execute zone transfer [%s]", e.Error())
-	}
-
-	for env := range r {
-		if env.Error != nil {
-			l.Infof("Zone transfer envelope error [%s]", env.Error.Error())
-			continue
-		}
-		for _, rr := range env.RR {
-			switch rr.(type) {
-			case *dns.A, *dns.AAAA, *dns.NS:
-				storeCache(provider, rr.Header().Name, []dns.RR{rr})
-			}
-		}
-
-	}
-
-	return nil
-}
-
 func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime.Runtime) dnsHandler {
 	l := loggy
 	return func(w dns.ResponseWriter, m *dns.Msg) {
@@ -1824,29 +1743,31 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 	}
 }
 
-// ServeDNS -- Entry point for DNS recursor
 func ServeDNS(cfg runtime.RecursorConfig, rt *runtime.Runtime, v4 bool, net string, d *runtime.ServerDomain, opennicMode bool, dnssecMode bool) {
-	/// set up old variables
+	// TODO: Get rid of these old variables variables
 	*dnssecEnabled = dnssecMode
-	provider := "tenta"
 	*debugLevel = true
+
+	provider := "tenta"
 	if opennicMode == true {
 		provider = "opennic"
 	}
+
 	ip, port := hostInfo(v4, net, d)
 	addr := fmt.Sprintf("%s:%d", ip, port)
 	lg := nlog.GetLogger("dnsrecursor").WithField("host_name", d.HostName).WithField("address", ip).WithField("port", port).WithField("proto", net)
 	logger.ilog = lg
+
 	notifyStarted := func() {
 		lg.Infof("Started %s dns recursor on %s", net, addr)
 	}
 	lg.Debugf("Preparing %s dns recursor on %s", net, addr)
-	if *dnssecEnabled {
+
+	if dnssecMode {
 		if e := getTrustedRootAnchors(lg, provider); e != nil {
 			panic(fmt.Sprintf("Cannot obtain root trust anchors. [%v]\n", e))
 		}
 	}
-
 	if provider == dnsProviderOpennic {
 		transferRootZone(lg, provider)
 	}
