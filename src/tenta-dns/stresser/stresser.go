@@ -161,7 +161,7 @@ func (w *worker) doWork(id uint) {
 			c.SingleInflight = true
 			c.DialTimeout = time.Second
 			c.WriteTimeout = time.Second * 3
-			c.ReadTimeout = time.Second * 30
+			c.ReadTimeout = time.Second * 100
 			in, _, err := c.Exchange(m, net.JoinHostPort(*ip, strconv.Itoa(int(*port))))
 			s := false
 			msg := ""
