@@ -191,7 +191,7 @@ func (q *queryParam) debug(format string, args ...interface{}) {
 }
 
 func (q *queryParam) setChainOfTrust(b bool) {
-	q.debug("\n\n\nSetting [%v] for chain of trust!!!\n\n\n\n", b)
+	// q.debug("\n\n\nSetting [%v] for chain of trust!!!\n\n\n\n", b)
 	q.chainOfTrustIntact = b
 }
 
@@ -326,7 +326,8 @@ func storeCache(provider, domain string, _recordLiteral interface{}) (time.Durat
 			}
 			// timeBytes, _ := time.Now().Add(time.Duration(rr.Header().Ttl) * time.Second).MarshalText()
 			// logger.debug("Trying to store [%s/%s] [%v] for [%d]\n", provider, domain, rr, rr.Header().Ttl)
-			t.Add(rr.String(), time.Duration(rr.Header().Ttl+1)*time.Second, nil)
+			strToAdd := strings.ToLower(rr.String())
+			t.Add(strToAdd, time.Duration(rr.Header().Ttl+1)*time.Second, nil)
 		}
 		/// shortcut ttl out so no RR scanning steps are needed to determine cache freshness
 		/// save the RR in string form, instead of wire form, it's just faster
@@ -404,7 +405,8 @@ func (q *queryParam) storeCache(provider, domain string, _recordLiteral interfac
 
 			// timeBytes, _ := time.Now().Add(time.Duration(rr.Header().Ttl) * time.Second).MarshalText()
 			q.debug("Trying to store [%s/%s] [%v] for [%d]\n", provider, domain, rr, rr.Header().Ttl)
-			t.Add(rr.String(), time.Duration(rr.Header().Ttl+1)*time.Second, q.chainOfTrustIntact)
+			strToAdd := strings.ToLower(rr.String())
+			t.Add(strToAdd, time.Duration(rr.Header().Ttl+1)*time.Second, q.chainOfTrustIntact)
 		}
 		for i, ptr := range ulteriorRR {
 			q.storeCache(provider, ulteriorDomain[i], []dns.RR{ptr})
@@ -1581,12 +1583,12 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 						q.debug("Sub-Resolve end >>>[%s]\n\n", tHost)
 						q.timeWasted += newq.timeWasted
 						/// the fear that the final A query will result in an unhandled CNAME makes this hack a life-saver
-						if token == q.vanilla {
-							q.debug("TargetServer found out in last iteration, launching continuation to avoid unhandled CNAME.\n")
-							nnewq := q.newContinationParam(len(q.tokens)-1, targetServer)
-							defer nnewq.join()
-							return nnewq.doResolve(resolveMethodRecursive)
-						}
+						// if token == q.vanilla {
+						// 	q.debug("TargetServer found out in last iteration, launching continuation to avoid unhandled CNAME.\n")
+						// 	nnewq := q.newContinationParam(len(q.tokens)-1, targetServer)
+						// 	defer nnewq.join()
+						// 	return nnewq.doResolve(resolveMethodRecursive)
+						// }
 						break
 					}
 				}
