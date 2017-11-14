@@ -981,7 +981,7 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16) (*dns.
 	q.debug(">>> Query response <<<\n%s\n", reply.String())
 
 	// if message is larger than generic udp packet size 512, retry on tcp
-	if err == dns.ErrTruncated {
+	if err == dns.ErrTruncated || (err != nil && strings.HasSuffix(err.Error(), "timeout")) {
 		q.debug("Retrying on TCP. Stay tuned.\n")
 		setupDNSClient(client, &port, target, targetCap, true, q.provider)
 		reply, rtt, err = client.Exchange(message, target+port)
@@ -1317,7 +1317,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 					} else {
 						insertFallbackServer(&fallbackServers, a)
 					}
-					tw, _ = q.storeCache(q.provider, reply.Question[0].Name, []dns.RR{a})
+					//tw, _ = q.storeCache(q.provider, reply.Question[0].Name, []dns.RR{a})
 					q.timeWasted += tw
 				} else if cname, ok := rr.(*dns.CNAME); ok {
 					foundCNAMEs = append(foundCNAMEs, cname)
@@ -1737,11 +1737,11 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 				elogger.Queuef("[%s -- %d] unresolvable.", qp.vanilla, qp.record)
 				response.SetRcode(m, dns.RcodeNameError)
 			}
-			elogger.Flush(l)
 		} else {
 			elogger.Queuef("ANSWER is: [%v][%v][%s]", resolvTime, qp.timeWasted, answer)
 			response.SetRcode(m, dns.RcodeSuccess)
 		}
+		elogger.Flush(l)
 
 		response.RecursionAvailable = true
 		if qp.chainOfTrustIntact && qp.CDFlagSet != true {
