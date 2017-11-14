@@ -1207,6 +1207,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 			}
 			oldTargetServer := targetServer
 			targetServer = ""
+			fallbackServers = nil
 			targetHost := make([]string, 0)
 			hasNSRecord, hasARecord, hasCNAMERecord, hasSOARecord, hasDSRecord := false, false, false, false, false
 			// if all goes well, reply should hold `answer` in authority section (appended with eventual glue records in additional)
@@ -1486,9 +1487,9 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 							}
 						}
 					}
-					if targetServer != "" {
-						continue
-					}
+					// if targetServer != "" {
+					// 	continue
+					// }
 				}
 				if hasARecord {
 					/// this should not be happening
