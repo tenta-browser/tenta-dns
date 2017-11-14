@@ -978,10 +978,11 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16) (*dns.
 	//client.Timeout = 5000 * time.Millisecond
 	//client.UDPSize = 4096
 	reply, rtt, err := client.Exchange(message, target+port)
+	q.debug("Question was [%s]\n", message.Question[0].String())
 	q.debug(">>> Query response <<<\n%s\n", reply.String())
 
 	// if message is larger than generic udp packet size 512, retry on tcp
-	if err == dns.ErrTruncated || (err != nil && strings.HasSuffix(err.Error(), "timeout")) {
+	if err == dns.ErrTruncated {
 		q.debug("Retrying on TCP. Stay tuned.\n")
 		setupDNSClient(client, &port, target, targetCap, true, q.provider)
 		reply, rtt, err = client.Exchange(message, target+port)
@@ -989,7 +990,10 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16) (*dns.
 
 	if err != nil {
 		return nil, t, newError(errorCannotResolve, severityFatal, "simpleResolve failed. [%s]", err)
+	} else if reply.Rcode == dns.RcodeServerFailure {
+		return nil, t, newError(errorCannotResolve, severityNuisance, "simpleResolve got SERVFAIL.")
 	}
+
 	q.debug("Dns rountrip time is [%v]\n", rtt)
 
 	for q.chainOfTrustIntact && subject != dns.TypeDNSKEY {
@@ -1142,8 +1146,16 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 		}
 		a := rr2[0].(*dns.A)
 		targetServer = a.A.String()
-		if len(rr2) > 1 {
-			populateFallbackServers(&fallbackServers, rr2[1:])
+		for _, nsRR := range rr[1:] {
+			rr2, tw, err = q.retrieveCache(q.provider, nsRR.(*dns.NS).Ns, dns.TypeA)
+			if err != nil {
+				continue
+			}
+			for _, fallbackRR := range rr2 {
+				if _, ok := fallbackRR.(*dns.A); ok {
+					insertFallbackServer(&fallbackServers, fallbackRR)
+				}
+			}
 		}
 		rangelimit = i
 		break
@@ -1325,7 +1337,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 					hasARecord = true
 					tw, _ = q.storeCache(q.provider, a.Header().Name, []dns.RR{a})
 					q.timeWasted += tw
-					/// resume
+
 					if targetServer == "" {
 						targetServer = a.A.String()
 					} else {
