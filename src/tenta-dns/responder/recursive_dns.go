@@ -975,7 +975,7 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16) (*dns.
 
 	}
 
-	client.Timeout = 5000 * time.Millisecond
+	//client.Timeout = 5000 * time.Millisecond
 	//client.UDPSize = 4096
 	reply, rtt, err := client.Exchange(message, target+port)
 	q.debug(">>> Query response <<<\n%s\n", reply.String())

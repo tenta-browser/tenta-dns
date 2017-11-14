@@ -6,8 +6,6 @@ import (
 	"encoding/csv"
 	"flag"
 	"fmt"
-	"github.com/miekg/dns"
-	"github.com/sirupsen/logrus"
 	"io"
 	"io/ioutil"
 	"math/rand"
@@ -19,6 +17,9 @@ import (
 	"sync"
 	"tenta-dns/log"
 	"time"
+
+	"github.com/miekg/dns"
+	"github.com/sirupsen/logrus"
 )
 
 var (
@@ -160,7 +161,7 @@ func (w *worker) doWork(id uint) {
 			c.SingleInflight = true
 			c.DialTimeout = time.Second
 			c.WriteTimeout = time.Second * 3
-			c.ReadTimeout = time.Second * 10
+			c.ReadTimeout = time.Second * 30
 			in, _, err := c.Exchange(m, net.JoinHostPort(*ip, strconv.Itoa(int(*port))))
 			s := false
 			msg := ""
