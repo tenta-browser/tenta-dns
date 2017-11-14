@@ -1763,11 +1763,11 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 				elogger.Queuef("[%s -- %d] unresolvable.", qp.vanilla, qp.record)
 				response.SetRcode(r, dns.RcodeNameError)
 			}
+			elogger.Flush(l)
 		} else {
 			elogger.Queuef("ANSWER is: [%v][%v][%s]", resolvTime, qp.timeWasted, answer)
 			response.SetRcode(r, dns.RcodeSuccess)
 		}
-		elogger.Flush(l)
 
 		response.RecursionAvailable = true
 		if qp.chainOfTrustIntact && qp.CDFlagSet != true {
