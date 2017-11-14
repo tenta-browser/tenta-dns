@@ -1197,12 +1197,25 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 			q.markTried(his)
 			q.debug("Marking [%v] as tried\n\n\n", his)
 			q.debug("Chain of trust is [%v]\n", q.chainOfTrustIntact)
-			reply, tw, err := q.simpleResolve(token, targetServer, dns.TypeNS)
-			q.timeWasted += tw
-			if err != nil {
-				q.debug("Problem found:: [%s]\n", err.String())
-				if err.severity > severityNuisance {
-					return nil, err
+
+			finalTargetServers := make([]string, 0)
+			finalTargetServers = append(finalTargetServers, targetServer)
+			finalTargetServers = append(finalTargetServers, fallbackServers...)
+			var reply *dns.Msg
+			for ind, iteratedTargetServer := range finalTargetServers {
+				reply, tw, err = q.simpleResolve(token, iteratedTargetServer, dns.TypeNS)
+				q.timeWasted += tw
+				if err != nil {
+					if ind < len(finalTargetServers)-1 {
+						q.debug("Simpleresolve failed on primary address, falling back.\n")
+						continue
+					}
+					q.debug("Problem found:: [%s]\n", err.String())
+					if err.severity > severityNuisance {
+						return nil, err
+					}
+				} else {
+					break
 				}
 			}
 			oldTargetServer := targetServer
@@ -1445,7 +1458,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 				q.debug("Returning early because NS/SOA records were queried.\n")
 				return q.result, nil
 			}
-
+			q.debug("TargetServer is [%s] and backupServers are [%v]\n", targetServer, fallbackServers)
 			/// unfortunately answer/authority/additional combo could not lead directly to a next step IP
 			if targetServer == "" && len(fallbackServers) == 0 {
 				/// check every NS record, as it's possible that the one target host picked does not have a matching A in additional
