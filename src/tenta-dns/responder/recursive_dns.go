@@ -1743,29 +1743,31 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 	}
 }
 
-// ServeDNS -- Entry point for DNS recursor
 func ServeDNS(cfg runtime.RecursorConfig, rt *runtime.Runtime, v4 bool, net string, d *runtime.ServerDomain, opennicMode bool, dnssecMode bool) {
-	/// set up old variables
+	// TODO: Get rid of these old variables variables
 	*dnssecEnabled = dnssecMode
-	provider := "tenta"
 	*debugLevel = true
+
+	provider := "tenta"
 	if opennicMode == true {
 		provider = "opennic"
 	}
+
 	ip, port := hostInfo(v4, net, d)
 	addr := fmt.Sprintf("%s:%d", ip, port)
 	lg := nlog.GetLogger("dnsrecursor").WithField("host_name", d.HostName).WithField("address", ip).WithField("port", port).WithField("proto", net)
 	logger.ilog = lg
+
 	notifyStarted := func() {
 		lg.Infof("Started %s dns recursor on %s", net, addr)
 	}
 	lg.Debugf("Preparing %s dns recursor on %s", net, addr)
-	if *dnssecEnabled {
+
+	if dnssecMode {
 		if e := getTrustedRootAnchors(lg, provider); e != nil {
 			panic(fmt.Sprintf("Cannot obtain root trust anchors. [%v]\n", e))
 		}
 	}
-
 	if provider == dnsProviderOpennic {
 		transferRootZone(lg, provider)
 	}
