@@ -981,7 +981,8 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16) (*dns.
 	q.debug(">>> Query response <<<\n%s\n", reply.String())
 
 	// if message is larger than generic udp packet size 512, retry on tcp
-	if err == dns.ErrTruncated || (err != nil && strings.HasSuffix(err.Error(), "timeout")) {
+	// also, when timed out, or rcode is servfail
+	if err == dns.ErrTruncated || (err != nil && strings.HasSuffix(err.Error(), "timeout")) || reply.Rcode == dns.RcodeServerFailure {
 		q.debug("Retrying on TCP. Stay tuned.\n")
 		setupDNSClient(client, &port, target, targetCap, true, q.provider)
 		reply, rtt, err = client.Exchange(message, target+port)
@@ -1113,8 +1114,8 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 	/// first of all check the cache
 	/// check fqdn directly for the target recordtype
 	resultRR = make([]dns.RR, 0)
-	q.debug("Trying to resolve directly from cache.\n")
 	rr, tw, err := q.retrieveCache(q.provider, q.vanilla, q.record)
+	fmt.Printf("Trying to resolve directly from cache.[%v][%v]\n", rr, err)
 	q.timeWasted += tw
 	if err == nil {
 		//return rr.(*dns.A).A.String(), nil
@@ -1142,8 +1143,16 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 		}
 		a := rr2[0].(*dns.A)
 		targetServer = a.A.String()
-		if len(rr2) > 1 {
-			populateFallbackServers(&fallbackServers, rr2[1:])
+		for _, nsRR := range rr[1:] {
+			rr2, tw, err = q.retrieveCache(q.provider, nsRR.(*dns.NS).Ns, dns.TypeA)
+			if err != nil {
+				continue
+			}
+			for _, fallbackRR := range rr2 {
+				if _, ok := fallbackRR.(*dns.A); ok {
+					insertFallbackServer(&fallbackServers, fallbackRR)
+				}
+			}
 		}
 		rangelimit = i
 		break
