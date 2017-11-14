@@ -725,7 +725,7 @@ func doTLSDiscovery(target, provider string) (tw time.Duration) {
 func findMatching(ds *dns.DS, dnskeyArr []*dns.DNSKEY) bool {
 	for _, dnskey := range dnskeyArr {
 		//fmt.Printf("cmp:: matching\n%s\n%s\n", dnskey.ToDS(ds.DigestType).String(), ds.String())
-		if compareDS(dnskey.ToDS(ds.DigestType), ds) {
+		if equalsDS(dnskey.ToDS(ds.DigestType), ds) {
 			return true
 		}
 	}
@@ -1677,14 +1677,6 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 	}
 	q.debug("\n\n\nFinishing doResolve for [%s] successfully with [%s]\n\n\n", q.vanilla, q.result)
 	return resultRR, nil
-}
-
-/// helper to compare two DS records (a modified DNSKEY and its parent zone's DS)
-func compareDS(a, b *dns.DS) bool {
-	if a.Algorithm == b.Algorithm && strings.ToLower(a.Digest) == strings.ToLower(b.Digest) && a.DigestType == b.DigestType && a.KeyTag == b.KeyTag {
-		return true
-	}
-	return false
 }
 
 /// TODO -- externalize this call (to a truly side channel), and perhaps supply to the daemon via a config directive
