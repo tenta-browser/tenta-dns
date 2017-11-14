@@ -28,9 +28,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
-	"github.com/miekg/dns"
-	"github.com/muesli/cache2go"
-	"github.com/sirupsen/logrus"
 	"log"
 	"math/rand"
 	"net"
@@ -40,6 +37,10 @@ import (
 	nlog "tenta-dns/log"
 	"tenta-dns/runtime"
 	"time"
+
+	"github.com/miekg/dns"
+	"github.com/muesli/cache2go"
+	"github.com/sirupsen/logrus"
 )
 
 const (
@@ -1214,38 +1215,49 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 			// handle soa and cname
 
 			/// if reply has answer section (also check for aa flag)
-			recordHolder := reply.Ns
-			if len(reply.Answer) > 0 { // && reply.Authoritative {
-				q.debug("We have ANSWERS section populated.\n")
-				recordHolder = reply.Answer
-			} else if len(reply.Ns) > 0 {
-				q.debug("We have AUTHORITY section populated.\n")
-				recordHolder = reply.Ns
-			} else {
-				q.debug("Nothing interesting received!!!\n")
-				/// hack similar in nature to the SOA response to the partial domain (while querying the full yields result)
-				if token == q.vanilla {
-					q.debug("Returning since this is the end. My only friend.\n")
-					return nil, newError(errorCannotResolve, severityMajor, "no usable response [%s]", token)
-				}
+			// recordHolder := reply.Ns
+			// if len(reply.Answer) > 0 { // && reply.Authoritative {
+			// 	q.debug("We have ANSWERS section populated.\n")
+			// 	recordHolder = reply.Answer
+			// } else if len(reply.Ns) > 0 {
+			// 	q.debug("We have AUTHORITY section populated.\n")
+			// 	recordHolder = reply.Ns
+			// } else {
+			// 	q.debug("Nothing interesting received!!!\n")
+			// 	/// hack similar in nature to the SOA response to the partial domain (while querying the full yields result)
+			// 	if token == q.vanilla {
+			// 		q.debug("Returning since this is the end. My only friend.\n")
+			// 		return nil, newError(errorCannotResolve, severityMajor, "no usable response [%s]", token)
+			// 	}
 
-				//fmt.Printf("Another trick we can try.\n")
-				qc := q.newContinationParam(len(q.tokens)-1, oldTargetServer)
-				defer qc.join()
-				qc.timeWasted = q.timeWasted
-				return qc.doResolve(resolveMethodRecursive)
+			// 	//fmt.Printf("Another trick we can try.\n")
+			// 	qc := q.newContinationParam(len(q.tokens)-1, oldTargetServer)
+			// 	defer qc.join()
+			// 	qc.timeWasted = q.timeWasted
+			// 	return qc.doResolve(resolveMethodRecursive)
 
+			// }
+
+			recordHolder := make([]dns.RR, 0) //len(reply.Answer)+len(reply.Ns)+len(reply.Extra))
+			for _, record := range reply.Answer {
+				recordHolder = append(recordHolder, record)
+			}
+			for _, record := range reply.Ns {
+				recordHolder = append(recordHolder, record)
+			}
+			for _, record := range reply.Extra {
+				recordHolder = append(recordHolder, record)
 			}
 
 			foundCNAMEs := make([]*dns.CNAME, 0)
 
 			for _, rr := range recordHolder {
 				/// first of all validate RR
-				if !contextIndependentValidateRR(rr, token) {
-					/// entry point for ns blacklisting (TODO)
-					q.debug("Found malicious RR [%s]. Skipping.\n", rr.String())
-					continue
-				}
+				// if !contextIndependentValidateRR(rr, token) {
+				// 	/// entry point for ns blacklisting (TODO)
+				// 	q.debug("Found malicious RR [%s]. Skipping.\n", rr.String())
+				// 	continue
+				// }
 				if ds, ok := rr.(*dns.DS); ok {
 					q.debug("Found DS records")
 					hasDSRecord = true
