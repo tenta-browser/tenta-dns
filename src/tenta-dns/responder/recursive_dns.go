@@ -77,7 +77,7 @@ const (
 	errorCacheTimeFormat        /// time format error
 	errorLoopDetected           /// resolving loop
 	errorInvalidArgument        /// invalid argument supplied to one of the functions
-	errorUnresolvable           /// the domain specified cannot be resolved
+	errorUnresolvable           /// the domain specified cannot be resolved, as in, somewhere in the stack, an irrevocable NXDOMAIN popped up
 	errorDNSSECBogus            /// bogus dnssec-specific record, drop resolve pursuant to rfc considerations
 )
 
@@ -1758,7 +1758,9 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 			if err.errorCode != errorUnresolvable && err.errorCode != errorCannotResolve {
 				elogger.Queuef("Failed for [%s -- %d] - [%s]", qp.vanilla, qp.record, err)
 				rt.Stats.Count(StatsQueryFailure)
-				response.SetRcode(r, dns.RcodeServerFailure)
+				if err.errorCode == errorUnresolvable {
+					response.SetRcode(r, dns.RcodeServerFailure)
+				}
 			} else {
 				elogger.Queuef("[%s -- %d] unresolvable.", qp.vanilla, qp.record)
 				response.SetRcode(r, dns.RcodeNameError)
