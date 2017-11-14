@@ -1677,17 +1677,8 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 
 func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime.Runtime) dnsHandler {
 	l := loggy
-	return func(w dns.ResponseWriter, m *dns.Msg) {
-		if strings.Contains(m.Question[0].String(), "vkcache") || m.Question[0].Qtype == dns.TypeANY {
-			return
-		}
-		/// check with rate limiter (and save to stats on false)
-
-		if network == "udp" && !net.ParseIP(w.RemoteAddr().String()).IsLoopback() && !rt.RateLimiter.CountAndPass(net.ParseIP(w.RemoteAddr().String())) {
-			rt.Stats.Tick("resolver", "throttled")
-			rt.Stats.Card(StatsQueryLimitedIps, w.RemoteAddr().String())
-			return
-		}
+	return func(w dns.ResponseWriter, r *dns.Msg) {
+		startTime := time.Now()
 		rt.Stats.Count(StatsQueryTotal)
 		if network == "udp" {
 			rt.Stats.Count(StatsQueryUDP)
@@ -1701,14 +1692,31 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 		rt.Stats.Tick("dns", "queries:all")
 		rt.Stats.Tick("dns", "queries:recursive")
 		rt.Stats.Card(StatsQueryUniqueIps, w.RemoteAddr().String())
-		startTime := time.Now()
-		l = l.WithField("domain", m.Question[0].Name)
+
+		if strings.Contains(r.Question[0].String(), "vkcache") || r.Question[0].Qtype == dns.TypeANY {
+			return
+		}
+
+		// Check with rate limiter (and save to stats on false)
+		if network == "udp" && !net.ParseIP(w.RemoteAddr().String()).IsLoopback() && !rt.RateLimiter.CountAndPass(net.ParseIP(w.RemoteAddr().String())) {
+			rt.Stats.Tick("resolver", "throttled")
+			rt.Stats.Card(StatsQueryLimitedIps, w.RemoteAddr().String())
+			return
+		}
+
+		// Don't allow ANY over UDP
+		if network == "udp" && r.Question[0].Qtype == dns.TypeANY {
+			refuseAny(w, r, rt)
+			return
+		}
+
+		l = l.WithField("domain", r.Question[0].Name)
 		elogger := new(nlog.EventualLogger)
-		elogger.Queuef("%v -- STARTING NEW TOPLEVEL RESOLVE FOR [%s]", time.Now(), m.Question[0].Name)
-		qp := newQueryParam(m.Question[0].Name, m.Question[0].Qtype, l, elogger, provider)
-		qp.CDFlagSet = m.CheckingDisabled
+		elogger.Queuef("%v -- STARTING NEW TOPLEVEL RESOLVE FOR [%s]", time.Now(), r.Question[0].Name)
+		qp := newQueryParam(r.Question[0].Name, r.Question[0].Qtype, l, elogger, provider)
+		qp.CDFlagSet = r.CheckingDisabled
 		resolveMethodToUse := resolveMethodRecursive
-		if m.RecursionDesired == false {
+		if r.RecursionDesired == false {
 			resolveMethodToUse = resolveMethodCacheOnly
 		}
 		qp.chainOfTrustIntact = *dnssecEnabled
@@ -1720,15 +1728,15 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 			if err.errorCode != errorUnresolvable && err.errorCode != errorCannotResolve {
 				elogger.Queuef("Failed for [%s -- %d] - [%s]", qp.vanilla, qp.record, err)
 				rt.Stats.Count(StatsQueryFailure)
-				response.SetRcode(m, dns.RcodeServerFailure)
+				response.SetRcode(r, dns.RcodeServerFailure)
 			} else {
 				elogger.Queuef("[%s -- %d] unresolvable.", qp.vanilla, qp.record)
-				response.SetRcode(m, dns.RcodeNameError)
+				response.SetRcode(r, dns.RcodeNameError)
 			}
 			elogger.Flush(l)
 		} else {
 			elogger.Queuef("ANSWER is: [%v][%v][%s]", resolvTime, qp.timeWasted, answer)
-			response.SetRcode(m, dns.RcodeSuccess)
+			response.SetRcode(r, dns.RcodeSuccess)
 		}
 
 		response.RecursionAvailable = true
