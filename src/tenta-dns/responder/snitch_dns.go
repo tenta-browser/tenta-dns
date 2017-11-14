@@ -45,32 +45,7 @@ func SnitchDNSServer(cfg runtime.NSnitchConfig, rt *runtime.Runtime, v4 bool, ne
 }
 
 func serveSnitchDNS(cfg runtime.NSnitchConfig, rt *runtime.Runtime, v4 bool, net string, d *runtime.ServerDomain) {
-	var ip string
-	if v4 {
-		ip = d.IPv4
-	} else {
-		ip = fmt.Sprintf("[%s]", d.IPv6)
-	}
-	var port int
-	if net == "tcp" {
-		if d.DnsTcpPort <= runtime.PORT_UNSET {
-			panic("Unable to start a TCP snitch without a valid TCP port")
-		}
-		port = d.DnsTcpPort
-	} else if net == "udp" {
-		if d.DnsUdpPort <= runtime.PORT_UNSET {
-			panic("Unable to start a UDP snitch without a valid TCP port")
-		}
-		port = d.DnsUdpPort
-	} else if net == "tls" {
-		if d.DnsTlsPort <= runtime.PORT_UNSET {
-			panic("Unable to start a TLS snitch without a valid TLS port")
-		}
-		port = d.DnsTlsPort
-	} else {
-		log.GetLogger("dnsnitch").Warnf("Unknown DNS net type %s", net)
-		return
-	}
+	ip, port := hostInfo(v4, net, d)
 	addr := fmt.Sprintf("%s:%d", ip, port)
 	lg := log.GetLogger("dnsnitch").WithField("host_name", d.HostName).WithField("address", ip).WithField("port", port).WithField("proto", net)
 	notifyStarted := func() {

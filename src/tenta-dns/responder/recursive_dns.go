@@ -1833,32 +1833,7 @@ func ServeDNS(cfg runtime.RecursorConfig, rt *runtime.Runtime, v4 bool, net stri
 	if opennicMode == true {
 		provider = "opennic"
 	}
-	var ip string
-	if v4 {
-		ip = d.IPv4
-	} else {
-		ip = fmt.Sprintf("[%s]", d.IPv6)
-	}
-	var port int
-	if net == "tcp" {
-		if d.DnsTcpPort <= runtime.PORT_UNSET {
-			panic("Unable to start a TCP recursive DNS server without a valid TCP port")
-		}
-		port = d.DnsTcpPort
-	} else if net == "udp" {
-		if d.DnsUdpPort <= runtime.PORT_UNSET {
-			panic("Unable to start a UDP recursive DNS server without a valid UDP port")
-		}
-		port = d.DnsUdpPort
-	} else if net == "tls" {
-		if d.DnsTlsPort <= runtime.PORT_UNSET {
-			panic("Unable to start a TLS recursive DNS server without a valid TLS port")
-		}
-		port = d.DnsTlsPort
-	} else {
-		nlog.GetLogger("dnsrecursor").Warnf("Unknown DNS net type %s", net)
-		return
-	}
+	ip, port := hostInfo(v4, net, d)
 	addr := fmt.Sprintf("%s:%d", ip, port)
 	lg := nlog.GetLogger("dnsrecursor").WithField("host_name", d.HostName).WithField("address", ip).WithField("port", port).WithField("proto", net)
 	logger.ilog = lg
