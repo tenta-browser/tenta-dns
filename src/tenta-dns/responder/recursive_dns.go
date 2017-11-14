@@ -989,10 +989,7 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16) (*dns.
 
 	if err != nil {
 		return nil, t, newError(errorCannotResolve, severityFatal, "simpleResolve failed. [%s]", err)
-	} else if reply.Rcode == dns.RcodeServerFailure {
-		return nil, t, newError(errorCannotResolve, severityNuisance, "simpleResolve got SERVFAIL.")
 	}
-
 	q.debug("Dns rountrip time is [%v]\n", rtt)
 
 	for q.chainOfTrustIntact && subject != dns.TypeDNSKEY {
