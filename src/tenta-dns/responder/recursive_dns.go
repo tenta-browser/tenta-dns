@@ -1458,6 +1458,55 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 				q.debug("Returning early because NS/SOA records were queried.\n")
 				return q.result, nil
 			}
+
+			if hasCNAMERecord {
+				/// moved all CNAME handling until after all of the reply records are read.
+				q.debug("second cname handling.[%s][%s][%v]\n", token, q.vanilla, foundCNAMEs)
+				cname := untangleCNAMEindirections(token, foundCNAMEs)
+
+				/// do not take partial domain name CNAMES into account, rather retry same server with more domain parts on the left
+				/// but there are cases, when the partial domain CNAME is the onl way through, like 'settings.data.microsoft.com'
+				/// so creating a continuation for this, and if it yields a result, will use it, otherwise, fall back to partial cname dereference
+				if token != q.vanilla {
+					// targetServer = oldTargetServer
+					// continue
+					q.debug("Detected partial domain alias. First trying more tokens on same server, the fallback to this CNAME redirection.\n")
+					qcname := q.newContinationParam(len(q.tokens)-1, oldTargetServer)
+					q.timeWasted += qcname.timeWasted
+					cnameCont, err := qcname.doResolve(resolveMethodRecursive)
+					q.debug("partial CNAME block resulted [%v]\n", cnameCont)
+					if err == nil {
+						defer qcname.join()
+						return cnameCont, err
+					}
+
+				}
+
+				/// if partial dereference isn't working, let's try partial
+				hasCNAMERecord = true
+				tw, _ = q.storeCache(q.provider, cname.Header().Name, []dns.RR{cname})
+				q.timeWasted += tw
+				/// this is not cool, we'll have to resolve the canonical name to get a usable ip address
+				q.debug("Going further down the rabbithole, via CNAME redirection [%s]\n", cname.Target)
+				newq := newQueryParam(cname.Target, q.record, q.ilog, q.elog, q.provider)
+				cnameDereference, err := newq.doResolve(resolveMethodRecursive)
+				q.logBuffer.Write(newq.logBuffer.Bytes())
+				/// this is an aggregated check for no error, and no nxdomain (et al)
+				/// but as it turns out (obviously) it is customary to CNAME over partial domains too, so that needs checking too
+				/// let's handle error separately, if unresolvable, just continue to the next rr
+				/// let's save the CNAME into the result slice
+				rrSlice := make([]dns.RR, len(foundCNAMEs))
+				for i := range foundCNAMEs {
+					rrSlice[i] = foundCNAMEs[i]
+				}
+				if cnameDereference != nil {
+					cnameDereference = append(cnameDereference, rrSlice...)
+				}
+				q.timeWasted += newq.timeWasted
+				return cnameDereference, err
+
+			}
+
 			q.debug("TargetServer is [%s] and backupServers are [%v]\n", targetServer, fallbackServers)
 			/// unfortunately answer/authority/additional combo could not lead directly to a next step IP
 			if targetServer == "" && len(fallbackServers) == 0 {
@@ -1506,53 +1555,6 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 				}
 				if hasARecord {
 					/// this should not be happening
-				}
-				if hasCNAMERecord {
-					/// moved all CNAME handling until after all of the reply records are read.
-					q.debug("second cname handling.[%s][%s][%v]\n", token, q.vanilla, foundCNAMEs)
-					cname := untangleCNAMEindirections(token, foundCNAMEs)
-
-					/// do not take partial domain name CNAMES into account, rather retry same server with more domain parts on the left
-					/// but there are cases, when the partial domain CNAME is the onl way through, like 'settings.data.microsoft.com'
-					/// so creating a continuation for this, and if it yields a result, will use it, otherwise, fall back to partial cname dereference
-					if token != q.vanilla {
-						// targetServer = oldTargetServer
-						// continue
-						q.debug("Detected partial domain alias. First trying more tokens on same server, the fallback to this CNAME redirection.\n")
-						qcname := q.newContinationParam(len(q.tokens)-1, oldTargetServer)
-						q.timeWasted += qcname.timeWasted
-						cnameCont, err := qcname.doResolve(resolveMethodRecursive)
-						q.debug("partial CNAME block resulted [%v]\n", cnameCont)
-						if err == nil {
-							defer qcname.join()
-							return cnameCont, err
-						}
-
-					}
-
-					/// if partial dereference isn't working, let's try partial
-					hasCNAMERecord = true
-					tw, _ = q.storeCache(q.provider, cname.Header().Name, []dns.RR{cname})
-					q.timeWasted += tw
-					/// this is not cool, we'll have to resolve the canonical name to get a usable ip address
-					q.debug("Going further down the rabbithole, via CNAME redirection [%s]\n", cname.Target)
-					newq := newQueryParam(cname.Target, q.record, q.ilog, q.elog, q.provider)
-					cnameDereference, err := newq.doResolve(resolveMethodRecursive)
-					q.logBuffer.Write(newq.logBuffer.Bytes())
-					/// this is an aggregated check for no error, and no nxdomain (et al)
-					/// but as it turns out (obviously) it is customary to CNAME over partial domains too, so that needs checking too
-					/// let's handle error separately, if unresolvable, just continue to the next rr
-					/// let's save the CNAME into the result slice
-					rrSlice := make([]dns.RR, len(foundCNAMEs))
-					for i := range foundCNAMEs {
-						rrSlice[i] = foundCNAMEs[i]
-					}
-					if cnameDereference != nil {
-						cnameDereference = append(cnameDereference, rrSlice...)
-					}
-					q.timeWasted += newq.timeWasted
-					return cnameDereference, err
-
 				}
 				if hasSOARecord {
 				}
