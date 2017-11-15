@@ -1758,7 +1758,7 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 
 		l = l.WithField("domain", r.Question[0].Name)
 		elogger := new(nlog.EventualLogger)
-		elogger.Queuef("%v -- STARTING NEW TOPLEVEL RESOLVE FOR [%s]", time.Now(), r.Question[0].Name)
+		elogger.Queuef("%v -- STARTING NEW TOPLEVEL RESOLVE FOR [%s][RecDesired - %v]", time.Now(), r.Question[0].Name, r.RecursionDesired)
 		qp := newQueryParam(r.Question[0].Name, r.Question[0].Qtype, l, elogger, provider)
 		qp.CDFlagSet = r.CheckingDisabled
 		resolveMethodToUse := resolveMethodRecursive
