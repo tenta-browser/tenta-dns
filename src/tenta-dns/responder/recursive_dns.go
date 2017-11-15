@@ -1770,12 +1770,12 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 			if err.errorCode != errorUnresolvable && err.errorCode != errorCannotResolve {
 				elogger.Queuef("Failed for [%s -- %d] - [%s]", qp.vanilla, qp.record, err)
 				rt.Stats.Count(StatsQueryFailure)
-				if err.errorCode == errorUnresolvable {
-					response.SetRcode(r, dns.RcodeServerFailure)
-				}
+				response.SetRcode(r, dns.RcodeServerFailure)
 			} else {
 				elogger.Queuef("[%s -- %d] unresolvable.", qp.vanilla, qp.record)
-				response.SetRcode(r, dns.RcodeNameError)
+				if err.errorCode == errorUnresolvable {
+					response.SetRcode(r, dns.RcodeNameError)
+				}
 			}
 			elogger.Flush(l)
 		} else {
