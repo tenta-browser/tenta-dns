@@ -1121,8 +1121,10 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 	q.timeWasted += tw
 	if err == nil {
 		//return rr.(*dns.A).A.String(), nil
+		q.debug("Cache HIT. Returning solution. [%v]")
 		return rr, nil
 	} else if resolveTechnique == resolveMethodCacheOnly {
+		q.debug("Cache miss, and requested cache response only. Returning failure.")
 		return nil, err
 	}
 	/// or check via NS records
@@ -1223,6 +1225,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 					}
 					q.debug("Problem found:: [%s]\n", err.String())
 					if err.severity > severityNuisance {
+						q.debug("Error in siple resolve. returning with error.")
 						return nil, err
 					}
 				} else {
@@ -1358,6 +1361,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 					/// okay, so, NXDOMAIN for the full domain, this unequivocally means that the domain is unresolvable
 					if token == q.vanilla && reply.MsgHdr.Rcode == dns.RcodeNameError {
 						/// entry point for negative caching!!! (todo)
+						q.debug("Explicit nxdomain found, for full query string. returning immediately.")
 						return nil, newError(errorUnresolvable, severitySuccess, "domain [%s] is unresolvable", q.vanilla)
 					}
 
@@ -1382,6 +1386,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 						/// jackpot -- store cache (it advertised itself as authroitative, so ANSWER section should be where data is at)
 						/// caching already handled via doLookup
 						defer qc.join()
+						q.debug("Tried the good old query-more-tokens-on-soa trick with success.")
 						return shortcut, nil
 					}
 
