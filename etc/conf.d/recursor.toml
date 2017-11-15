@@ -1,6 +1,6 @@
 servertype="recursor"
 
-opennic=true
+# opennic=true
 
 [domaains]
     [domains.nameinspector]

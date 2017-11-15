@@ -1820,9 +1820,8 @@ func ServeDNS(cfg runtime.RecursorConfig, rt *runtime.Runtime, v4 bool, net stri
 			panic(fmt.Sprintf("Cannot obtain root trust anchors. [%v]\n", e))
 		}
 	}
-	if provider == dnsProviderOpennic {
-		transferRootZone(lg, provider)
-	}
+
+	transferRootZone(lg, provider)
 
 	pchan := make(chan interface{}, 1)
 	srv := &dns.Server{Addr: addr, Net: net, NotifyStartedFunc: notifyStarted, Handler: dns.HandlerFunc(dnsRecoverWrap(handleDNSMessage(lg, provider, net, rt), pchan))}
