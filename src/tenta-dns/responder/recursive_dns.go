@@ -1778,7 +1778,7 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 			}
 			elogger.Flush(l)
 		} else {
-			l.Infof("ANSWER is: [%v][%v][%s]", resolvTime, qp.timeWasted, answer)
+			elogger.Queuef("ANSWER is: [%v][%v][%s]", resolvTime, qp.timeWasted, answer)
 			response.SetRcode(r, dns.RcodeSuccess)
 		}
 
