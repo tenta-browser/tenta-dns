@@ -960,20 +960,19 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16) (*dns.
 		message.RecursionDesired = false
 
 	}
-	t, targetCap := hasTLSCapability("common", target, "hasTLSSupport")
-	q.debug("[%s] TARGET CAP recognized as [%d]\n\n", target, targetCap)
+	// t, targetCap := hasTLSCapability("common", target, "hasTLSSupport")
+	// q.debug("[%s] TARGET CAP recognized as [%d]\n\n", target, targetCap)
 	client := new(dns.Client)
 
 	port := ""
-	setupDNSClient(client, &port, target, targetCap, preferredProtocol == "tcp", q.provider)
+	setupDNSClient(client, &port, target, serverCapabilityFalse, preferredProtocol == "tcp", q.provider)
 
-	if targetCap == serverCapabilityUnknown {
-		go func() {
-			/// duration does not matter here so much
-			doTLSDiscovery(target, q.provider)
-		}()
-
-	}
+	// if targetCap == serverCapabilityUnknown {
+	// 	go func() {
+	// 		/// duration does not matter here so much
+	// 		doTLSDiscovery(target, q.provider)
+	// 	}()
+	// }
 
 	//client.Timeout = 5000 * time.Millisecond
 	//client.UDPSize = 4096
@@ -984,14 +983,14 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16) (*dns.
 	// if message is larger than generic udp packet size 512, retry on tcp
 	if err == dns.ErrTruncated {
 		q.debug("Retrying on TCP. Stay tuned.\n")
-		setupDNSClient(client, &port, target, targetCap, true, q.provider)
+		setupDNSClient(client, &port, target, serverCapabilityFalse, true, q.provider)
 		reply, rtt, err = client.Exchange(message, target+port)
 	}
 
 	if err != nil {
-		return nil, t, newError(errorCannotResolve, severityFatal, "simpleResolve failed. [%s]", err)
+		return nil, 0, newError(errorCannotResolve, severityFatal, "simpleResolve failed. [%s]", err)
 	} else if reply.Rcode == dns.RcodeServerFailure {
-		return nil, t, newError(errorCannotResolve, severityNuisance, "simpleResolve got SERVFAIL.")
+		return nil, 0, newError(errorCannotResolve, severityNuisance, "simpleResolve got SERVFAIL.")
 	}
 
 	q.debug("Dns rountrip time is [%v]\n", rtt)
@@ -1022,7 +1021,7 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16) (*dns.
 		break
 	}
 
-	return reply, t, nil
+	return reply, 0, nil
 }
 
 /// scans additional section for further information (any type) about the given record (which has rtype type) -- this is gathering data for caching mostly
