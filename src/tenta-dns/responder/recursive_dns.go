@@ -1764,7 +1764,6 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 		answer, err := qp.doResolve(resolveMethodToUse)
 		resolvTime := time.Now().Sub(startTime)
 		response := new(dns.Msg)
-		response.SetRcode(r, dns.RcodeSuccess)
 		if err != nil {
 			elogger.Queuef("RESOLVE RETURNED ERROR [%s]", err.String())
 			if err.errorCode != errorUnresolvable && err.errorCode != errorCannotResolve {
