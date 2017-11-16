@@ -43,6 +43,7 @@ type Runtime struct {
 	DB          *leveldb.DB
 	Geo         *Geo
 	Stats       *Stats
+	IPPool      *Pool
 	stop        chan bool
 	started     uint
 	lg          *logrus.Entry
@@ -83,6 +84,7 @@ func NewRuntime(cfg Config) *Runtime {
 		panic(err)
 	}
 
+	rt.IPPool = StartIPPool()
 	rt.Stats = StartStats(rt)
 	rt.RateLimiter = StartLimiter(cfg.RateThreshold)
 	rt.AddService()
