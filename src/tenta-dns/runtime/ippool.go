@@ -23,7 +23,6 @@
 package runtime
 
 import (
-	"fmt"
 	"math/rand"
 	"net"
 	"tenta-dns/log"
@@ -35,56 +34,36 @@ type Pool struct {
 	r *rand.Rand
 }
 
-func ListAvailableIPs() ([]net.IP, error) {
-	ret := make([]net.IP, 0)
-	ifs, e := net.Interfaces()
-	l := log.GetLogger("common")
-	if e != nil {
-		l.Fatalf("Cannot query local interfaces")
-		panic(fmt.Sprintf("Cannot query network interfaces", e.Error()))
-	}
-
-	for _, intf := range ifs {
-		l.Debugf("Scanning intf [%s]", intf.Name)
-		if addrs, e := intf.Addrs(); e == nil {
-			for _, addr := range addrs {
-				l.Debugf("Scanning address [%s]", addr.String())
-				switch a := addr.(type) {
-				case *net.IPNet:
-					if a.IP.IsGlobalUnicast() { //} && !common.IsPrivateIp(a.IP) {
-						ret = append(ret, a.IP)
-					}
-				case *net.IPAddr:
-					if a.IP.IsGlobalUnicast() { //} && !common.IsPrivateIp(a.IP) {
-						ret = append(ret, a.IP)
-					}
-				}
-			}
-		}
-	}
-	if len(ret) == 0 {
-		panic(fmt.Sprintf("Empty ip pool"))
-	}
-	return ret, nil
-}
-
-func StartIPPool() *Pool {
+func StartIPPool(cfgIPs []string) *Pool {
 	l := log.GetLogger("runtime")
-	ips, e := ListAvailableIPs()
-	if e != nil {
-		l.Fatalf("Cannot get list of available IP addresses [%s]", e.Error())
-		panic(e)
+	var ips []net.IP
+	if cfgIPs == nil || len(cfgIPs) == 0 {
+		l.Infof("Starting without any outbound IP specified. Default IP will be used.")
+		ips = nil
+	} else {
+		ips := make([]net.IP, 0)
+		for _, strIP := range cfgIPs {
+			ip := net.ParseIP(strIP)
+			ips = append(ips, ip)
+		}
+		l.Infof("Initialized IP Pool with [%v]", ips)
 	}
-	l.Infof("Initialized IP Pool with [%v]", ips)
+
 	return &Pool{ips, rand.New(rand.NewSource(time.Now().UnixNano()))}
 }
 
-func (p *Pool) RandomizeUDPAddr() *net.UDPAddr {
-	t := p.p[p.r.Intn(len(p.p)-1)]
-	return &net.UDPAddr{IP: t}
+func (p *Pool) RandomizeUDPDialer() *net.Dialer {
+	ret := &net.Dialer{}
+	if len(p.p) > 0 {
+		ret.LocalAddr = &net.UDPAddr{IP: p.p[p.r.Intn(len(p.p)-1)]}
+	}
+	return ret
 }
 
-func (p *Pool) RandomizeTCPAddr() *net.TCPAddr {
-	t := p.p[p.r.Intn(len(p.p)-1)]
-	return &net.TCPAddr{IP: t}
+func (p *Pool) RandomizeTCPDialer() *net.Dialer {
+	ret := &net.Dialer{}
+	if len(p.p) > 0 {
+		ret.LocalAddr = &net.TCPAddr{IP: p.p[p.r.Intn(len(p.p)-1)]}
+	}
+	return ret
 }

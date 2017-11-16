@@ -60,6 +60,7 @@ type Config struct {
 	DefaultDnsTcpPort int
 	DefaultDnsTlsPort int
 	RateThreshold     uint64
+	OutboundIPs       []string
 }
 
 type NSnitchConfig struct {

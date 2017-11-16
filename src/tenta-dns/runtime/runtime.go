@@ -84,7 +84,7 @@ func NewRuntime(cfg Config) *Runtime {
 		panic(err)
 	}
 
-	rt.IPPool = StartIPPool()
+	rt.IPPool = StartIPPool(cfg.OutboundIPs)
 	rt.Stats = StartStats(rt)
 	rt.RateLimiter = StartLimiter(cfg.RateThreshold)
 	rt.AddService()

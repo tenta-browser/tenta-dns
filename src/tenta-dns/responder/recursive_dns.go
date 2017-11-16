@@ -689,11 +689,10 @@ func setupDNSClient(client *dns.Client, port *string, target string, tlsCapabili
 		*port = ":53"
 	}
 
-	client.Dialer = &net.Dialer{}
 	if needsTCP {
-		client.Dialer.LocalAddr = ips.RandomizeTCPAddr()
+		client.Dialer = ips.RandomizeTCPDialer()
 	} else {
-		client.Dialer.LocalAddr = ips.RandomizeUDPAddr()
+		client.Dialer = ips.RandomizeUDPDialer()
 	}
 
 	return
@@ -993,7 +992,6 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16) (*dns.
 	if err == dns.ErrTruncated {
 		q.debug("Retrying on TCP. Stay tuned.\n")
 		setupDNSClient(client, &port, target, serverCapabilityFalse, true, q.provider, q.ips)
-		client.Dialer.LocalAddr = q.ips.RandomizeTCPAddr()
 		reply, rtt, err = client.Exchange(message, target+port)
 	}
 
