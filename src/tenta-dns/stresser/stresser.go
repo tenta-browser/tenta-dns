@@ -231,7 +231,7 @@ func testRecords(r *csv.Reader, num uint, lg *logrus.Entry) {
 		case r := <-rc:
 			results[r.name] = r
 			break
-		case <-time.After(time.Second * 15):
+		case <-time.After(time.Second * 60):
 			run = false
 			break
 		}
