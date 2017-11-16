@@ -55,7 +55,7 @@ func StartIPPool(cfgIPs []string) *Pool {
 func (p *Pool) RandomizeUDPDialer() *net.Dialer {
 	ret := &net.Dialer{}
 	if len(p.p) > 0 {
-		ret.LocalAddr = &net.UDPAddr{IP: p.p[p.r.Intn(len(p.p)-1)]}
+		ret.LocalAddr = &net.UDPAddr{IP: p.p[p.r.Intn(len(p.p))]}
 	}
 	return ret
 }
@@ -63,7 +63,7 @@ func (p *Pool) RandomizeUDPDialer() *net.Dialer {
 func (p *Pool) RandomizeTCPDialer() *net.Dialer {
 	ret := &net.Dialer{}
 	if len(p.p) > 0 {
-		ret.LocalAddr = &net.TCPAddr{IP: p.p[p.r.Intn(len(p.p)-1)]}
+		ret.LocalAddr = &net.TCPAddr{IP: p.p[p.r.Intn(len(p.p))]}
 	}
 	return ret
 }
