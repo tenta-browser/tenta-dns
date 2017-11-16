@@ -41,7 +41,7 @@ func StartIPPool(cfgIPs []string) *Pool {
 		l.Infof("Starting without any outbound IP specified. Default IP will be used.")
 		ips = nil
 	} else {
-		ips := make([]net.IP, 0)
+		ips = make([]net.IP, 0)
 		for _, strIP := range cfgIPs {
 			ip := net.ParseIP(strIP)
 			ips = append(ips, ip)
