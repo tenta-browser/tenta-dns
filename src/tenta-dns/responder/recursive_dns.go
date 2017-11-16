@@ -1289,6 +1289,19 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 
 			foundCNAMEs := make([]*dns.CNAME, 0)
 
+			/// this is a sloppy variant of the return SOA on intermediary queries
+			if len(recordHolder) == 0 && token != q.vanilla {
+				qc := q.newContinationParam(len(q.tokens)-1, oldTargetServer)
+				shortcut, err := qc.doResolve(resolveMethodRecursive)
+				if err != nil {
+					q.debug("Hail Mary failed [%s]\n", err.String())
+				} else {
+					defer qc.join()
+					q.debug("Tried the good old query-more-tokens-on-nothing trick with success.")
+					return shortcut, nil
+				}
+			}
+
 			for _, rr := range recordHolder {
 				/// first of all validate RR
 				// if !contextIndependentValidateRR(rr, token) {
