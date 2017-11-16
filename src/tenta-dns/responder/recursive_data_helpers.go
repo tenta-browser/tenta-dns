@@ -1,14 +1,16 @@
 package responder
 
 import (
-	"github.com/miekg/dns"
-	"strings"
-	"net/http"
+	"encoding/xml"
 	"fmt"
 	"io/ioutil"
-	"encoding/xml"
-	"github.com/sirupsen/logrus"
+	"net/http"
+	"strings"
 	"tenta-dns/log"
+	"tenta-dns/runtime"
+
+	"github.com/miekg/dns"
+	"github.com/sirupsen/logrus"
 )
 
 // Deep equality check for DS records
@@ -23,7 +25,7 @@ func equalsDS(a, b *dns.DS) bool {
 }
 
 // Download trust anchors
-func getTrustedRootAnchors(l *logrus.Entry, provider string) error {
+func getTrustedRootAnchors(l *logrus.Entry, provider string, ips *runtime.Pool) error {
 	rootDS := make([]dns.RR, 0)
 
 	if provider == "tenta" {
@@ -53,7 +55,7 @@ func getTrustedRootAnchors(l *logrus.Entry, provider string) error {
 		}
 
 	} else if provider == "opennic" {
-		q := newQueryParam(".", dns.TypeDNSKEY, l, new(log.EventualLogger), provider)
+		q := newQueryParam(".", dns.TypeDNSKEY, l, new(log.EventualLogger), provider, ips)
 		krr, e := q.doResolve(resolveMethodFinalQuestion)
 		if e != nil {
 			return fmt.Errorf("Cannot get opennic root keys. [%s]", e.Error())

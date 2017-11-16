@@ -148,6 +148,7 @@ type queryParam struct {
 	elog                  *nlog.EventualLogger /// this one will be shown if certain conditions are met
 	provider              string
 	authority, additional *[]dns.RR
+	ips                   *runtime.Pool
 }
 
 /// 2 structs to help parse xml response from iana -- root zone trust anchor
@@ -165,7 +166,7 @@ type resultData struct {
 }
 
 func (q *queryParam) newContinationParam(rangeLimit int, serverHint string) *queryParam {
-	return &queryParam{q.vanilla, q.tokens, q.record, true, rangeLimit, serverHint, q.CDFlagSet, nil, q.history, q.logBuffer, 0, q.chainOfTrustIntact, q, q.ilog, q.elog, q.provider, q.authority, q.additional}
+	return &queryParam{q.vanilla, q.tokens, q.record, true, rangeLimit, serverHint, q.CDFlagSet, nil, q.history, q.logBuffer, 0, q.chainOfTrustIntact, q, q.ilog, q.elog, q.provider, q.authority, q.additional, q.ips}
 }
 
 /// fork-join scheme for lookup continuations
@@ -262,7 +263,7 @@ func (e *dnsError) String() string {
 
 /// assumes domain is valid (eg. tenta.io, asd.qwe.zxc.lol)
 /// dnssec is on by default
-func newQueryParam(vanilla string, record uint16, ilog *logrus.Entry, elog *nlog.EventualLogger, provider string) *queryParam {
+func newQueryParam(vanilla string, record uint16, ilog *logrus.Entry, elog *nlog.EventualLogger, provider string, ips *runtime.Pool) *queryParam {
 	if dns.IsFqdn(vanilla) {
 		vanilla = vanilla[:len(vanilla)-1]
 	}
@@ -271,7 +272,7 @@ func newQueryParam(vanilla string, record uint16, ilog *logrus.Entry, elog *nlog
 	for i := len(temp) - 1; i >= 0; i-- {
 		tokens[len(temp)-i-1] = strings.Join(temp[i:len(temp)], ".") + "."
 	}
-	return &queryParam{dns.Fqdn(vanilla), tokens, record, false, 0, "", false, nil, make([]historyItem, 0), new(bytes.Buffer), 0, true, nil, ilog, elog, provider, new([]dns.RR), new([]dns.RR)}
+	return &queryParam{dns.Fqdn(vanilla), tokens, record, false, 0, "", false, nil, make([]historyItem, 0), new(bytes.Buffer), 0, true, nil, ilog, elog, provider, new([]dns.RR), new([]dns.RR), ips}
 }
 
 /// define it here for short term clarity
@@ -976,6 +977,8 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16) (*dns.
 
 	//client.Timeout = 5000 * time.Millisecond
 	//client.UDPSize = 4096
+	client.Dialer = &net.Dialer{}
+	client.Dialer.LocalAddr = q.ips.RandomizeIP()
 	reply, rtt, err := client.Exchange(message, target+port)
 	q.debug("Question was [%s]\n", message.Question[0].String())
 	q.debug(">>> Query response <<<\n%s\n", reply.String())
@@ -1437,7 +1440,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 
 								if len(cnameSlice) > 0 {
 									finalTarget := untangleCNAMEindirections(token, cnameSlice)
-									soaDerefCont := newQueryParam(finalTarget.Target, q.record, q.ilog, q.elog, q.provider)
+									soaDerefCont := newQueryParam(finalTarget.Target, q.record, q.ilog, q.elog, q.provider, q.ips)
 									soaDerefRes, err := soaDerefCont.doResolve(resolveMethodRecursive)
 									q.logBuffer.Write(soaDerefCont.logBuffer.Bytes())
 									q.timeWasted += soaDerefCont.timeWasted
@@ -1504,7 +1507,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 				q.timeWasted += tw
 				/// this is not cool, we'll have to resolve the canonical name to get a usable ip address
 				q.debug("Going further down the rabbithole, via CNAME redirection [%s]\n", cname.Target)
-				newq := newQueryParam(cname.Target, q.record, q.ilog, q.elog, q.provider)
+				newq := newQueryParam(cname.Target, q.record, q.ilog, q.elog, q.provider, q.ips)
 				cnameDereference, err := newq.doResolve(resolveMethodRecursive)
 				q.logBuffer.Write(newq.logBuffer.Bytes())
 				/// this is an aggregated check for no error, and no nxdomain (et al)
@@ -1606,7 +1609,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 					if tHost != "" {
 						q.debug("Trying to resolve eluding host. Launching sub-resolve for [%s]\n\n", tHost)
 						/// resolve meaning A record, to be used further
-						newq := newQueryParam(tHost, dns.TypeA, q.ilog, q.elog, q.provider)
+						newq := newQueryParam(tHost, dns.TypeA, q.ilog, q.elog, q.provider, q.ips)
 						_targetServer, err := newq.doResolve(resolveMethodRecursive)
 						q.logBuffer.Write(newq.logBuffer.Bytes())
 						if err != nil {
@@ -1685,7 +1688,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 	if len(finalCnames) > 0 && q.record != dns.TypeCNAME {
 		q.debug("Final query CNAME caught, and handled.\n")
 		lastCNAME := untangleCNAMEindirections(q.vanilla, finalCnames)
-		qfinal := newQueryParam(lastCNAME.Target, q.record, q.ilog, q.elog, q.provider)
+		qfinal := newQueryParam(lastCNAME.Target, q.record, q.ilog, q.elog, q.provider, q.ips)
 		//qfinal.addToResultSet(finalCnameRR)
 		res, err := qfinal.doResolve(resolveMethodRecursive)
 		q.logBuffer.Write(qfinal.logBuffer.Bytes())
@@ -1744,7 +1747,7 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 		}
 
 		// Check with rate limiter (and save to stats on false)
-		if network == "udp" && !net.ParseIP(w.RemoteAddr().String()).IsLoopback() && !rt.RateLimiter.CountAndPass(net.ParseIP(w.RemoteAddr().String())) {
+		if network == "udp" && !rt.RateLimiter.CountAndPass(net.ParseIP(w.RemoteAddr().String())) {
 			rt.Stats.Tick("resolver", "throttled")
 			rt.Stats.Card(StatsQueryLimitedIps, w.RemoteAddr().String())
 			return
@@ -1759,7 +1762,7 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 		l = l.WithField("domain", r.Question[0].Name)
 		elogger := new(nlog.EventualLogger)
 		elogger.Queuef("%v -- STARTING NEW TOPLEVEL RESOLVE FOR [%s][RecDesired - %v]", time.Now(), r.Question[0].Name, r.RecursionDesired)
-		qp := newQueryParam(r.Question[0].Name, r.Question[0].Qtype, l, elogger, provider)
+		qp := newQueryParam(r.Question[0].Name, r.Question[0].Qtype, l, elogger, provider, rt.IPPool)
 		qp.CDFlagSet = r.CheckingDisabled
 		resolveMethodToUse := resolveMethodRecursive
 		if r.RecursionDesired == false {
@@ -1820,7 +1823,7 @@ func ServeDNS(cfg runtime.RecursorConfig, rt *runtime.Runtime, v4 bool, net stri
 	lg.Debugf("Preparing %s dns recursor on %s", net, addr)
 
 	if dnssecMode {
-		if e := getTrustedRootAnchors(lg, provider); e != nil {
+		if e := getTrustedRootAnchors(lg, provider, rt.IPPool); e != nil {
 			panic(fmt.Sprintf("Cannot obtain root trust anchors. [%v]\n", e))
 		}
 	}
