@@ -91,6 +91,7 @@ const (
 	resolveMethodRecursive = iota
 	resolveMethodCacheOnly
 	resolveMethodFinalQuestion
+	resolveMethodRecursiveNonPedantic
 )
 
 var (
@@ -1316,6 +1317,17 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 							/// cache not working is nuisance error, as in normal flow is not interrupted
 							/// set a context independent signal for ulterior investigation
 						}
+					} else if resolveTechnique == resolveMethodRecursive {
+						/// we have a NS record without glue, so we go ahead and take the time to resolve it
+						/// because there are surprisingly many cases in which one NS has A record, and it times out often (logically)
+						q.debug("\n\n\nLAUNCHING PEDANTIC INTERMEDIARY RESOLVE FOR [%s]\n\n\n", ns.Ns)
+						qIntermediary := newQueryParam(ns.Ns, dns.TypeA, q.ilog, q.elog, q.provider, q.ips)
+						additional, e = qIntermediary.doResolve(resolveMethodRecursiveNonPedantic)
+						if e != nil {
+							q.debug("Cannot resolve intermediary NS [%s]\n", ns.Ns)
+						} else {
+							q.debug("Intermediary resolve successful!!")
+						}
 					}
 
 					/// if this is the last step in loop, and NS type records are sought, this is the answer.
@@ -1323,6 +1335,17 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 						q.addToResultSet([]dns.RR{ns})
 					}
 
+					for _, add := range additional {
+						a, ok := add.(*dns.A)
+						if !ok {
+							continue
+						}
+						if targetServer == "" {
+							targetServer = a.A.String()
+						} else {
+							insertFallbackServer(&fallbackServers, a)
+						}
+					}
 					// special case handling when queried type is NS:
 					// adding all NS records to result slice
 					// after response loop check again and simply return
