@@ -31,12 +31,12 @@ import (
 )
 
 type Pool struct {
-	p []net.Addr
+	p []net.IP
 	r *rand.Rand
 }
 
-func ListAvailableIPs() ([]net.Addr, error) {
-	ret := make([]net.Addr, 0)
+func ListAvailableIPs() ([]net.IP, error) {
+	ret := make([]net.IP, 0)
 	ifs, e := net.Interfaces()
 	l := log.GetLogger("common")
 	if e != nil {
@@ -49,15 +49,14 @@ func ListAvailableIPs() ([]net.Addr, error) {
 		if addrs, e := intf.Addrs(); e == nil {
 			for _, addr := range addrs {
 				l.Debugf("Scanning address [%s]", addr.String())
-
 				switch a := addr.(type) {
 				case *net.IPNet:
 					if a.IP.IsGlobalUnicast() { //} && !common.IsPrivateIp(a.IP) {
-						ret = append(ret, addr)
+						ret = append(ret, a.IP)
 					}
 				case *net.IPAddr:
 					if a.IP.IsGlobalUnicast() { //} && !common.IsPrivateIp(a.IP) {
-						ret = append(ret, addr)
+						ret = append(ret, a.IP)
 					}
 				}
 			}
@@ -80,6 +79,12 @@ func StartIPPool() *Pool {
 	return &Pool{ips, rand.New(rand.NewSource(time.Now().UnixNano()))}
 }
 
-func (p *Pool) RandomizeIP() net.Addr {
-	return p.p[p.r.Intn(len(p.p)-1)]
+func (p *Pool) RandomizeUDPAddr() *net.UDPAddr {
+	t := p.p[p.r.Intn(len(p.p)-1)]
+	return &net.UDPAddr{IP: t}
+}
+
+func (p *Pool) RandomizeTCPAddr() *net.TCPAddr {
+	t := p.p[p.r.Intn(len(p.p)-1)]
+	return &net.TCPAddr{IP: t}
 }

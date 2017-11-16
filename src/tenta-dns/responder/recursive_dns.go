@@ -640,7 +640,7 @@ func hasTLSCapability(provider, domain, key string) (time.Duration, int) {
 }
 
 /// TODO
-func setupDNSClient(client *dns.Client, port *string, target string, tlsCapability int, needsTCP bool, provider string) (tw time.Duration) {
+func setupDNSClient(client *dns.Client, port *string, target string, tlsCapability int, needsTCP bool, provider string, ips *runtime.Pool) (tw time.Duration) {
 	if tlsCapability == serverCapabilityTrue {
 		hostname := target
 		// hostnameAvailable := false
@@ -688,16 +688,24 @@ func setupDNSClient(client *dns.Client, port *string, target string, tlsCapabili
 		client.Net = "udp"
 		*port = ":53"
 	}
+
+	client.Dialer = &net.Dialer{}
+	if needsTCP {
+		client.Dialer.LocalAddr = ips.RandomizeTCPAddr()
+	} else {
+		client.Dialer.LocalAddr = ips.RandomizeUDPAddr()
+	}
+
 	return
 }
 
 /// a simple tls based discovery query
-func doTLSDiscovery(target, provider string) (tw time.Duration) {
+func doTLSDiscovery(target, provider string, ips *runtime.Pool) (tw time.Duration) {
 	m := new(dns.Msg)
 	m.SetQuestion(".", dns.TypeNULL)
 	c := new(dns.Client)
 	port := ""
-	setupDNSClient(c, &port, target, serverCapabilityTrue, false, provider)
+	setupDNSClient(c, &port, target, serverCapabilityTrue, false, provider, ips)
 	//c.Timeout = 3 * time.Second
 	_, _, err := c.Exchange(m, target+port)
 	if err != nil {
@@ -966,7 +974,7 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16) (*dns.
 	client := new(dns.Client)
 
 	port := ""
-	setupDNSClient(client, &port, target, serverCapabilityFalse, preferredProtocol == "tcp", q.provider)
+	setupDNSClient(client, &port, target, serverCapabilityFalse, preferredProtocol == "tcp", q.provider, q.ips)
 
 	// if targetCap == serverCapabilityUnknown {
 	// 	go func() {
@@ -977,8 +985,6 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16) (*dns.
 
 	//client.Timeout = 5000 * time.Millisecond
 	//client.UDPSize = 4096
-	client.Dialer = &net.Dialer{}
-	client.Dialer.LocalAddr = q.ips.RandomizeIP()
 	reply, rtt, err := client.Exchange(message, target+port)
 	q.debug("Question was [%s]\n", message.Question[0].String())
 	q.debug(">>> Query response <<<\n%s\n", reply.String())
@@ -986,7 +992,8 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16) (*dns.
 	// if message is larger than generic udp packet size 512, retry on tcp
 	if err == dns.ErrTruncated {
 		q.debug("Retrying on TCP. Stay tuned.\n")
-		setupDNSClient(client, &port, target, serverCapabilityFalse, true, q.provider)
+		setupDNSClient(client, &port, target, serverCapabilityFalse, true, q.provider, q.ips)
+		client.Dialer.LocalAddr = q.ips.RandomizeTCPAddr()
 		reply, rtt, err = client.Exchange(message, target+port)
 	}
 
