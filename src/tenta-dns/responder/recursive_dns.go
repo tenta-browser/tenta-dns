@@ -1004,6 +1004,8 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16, sugges
 		return nil, 0, newError(errorCannotResolve, severityFatal, "simpleResolve failed. [%s]", err)
 	} else if reply.Rcode == dns.RcodeServerFailure {
 		return nil, 0, newError(errorCannotResolve, severityNuisance, "simpleResolve got SERVFAIL.")
+	} else if reply.Rcode == dns.RcodeRefused {
+		return nil, 0, newError(errorCannotResolve, severityNuisance, "simpleResolve got REFUSED.")
 	}
 
 	q.debug("Dns rountrip time is [%v]\n", rtt)
@@ -1223,6 +1225,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 			q.markTried(his)
 			q.debug("Marking [%v] as tried\n\n\n", his)
 			q.debug("Chain of trust is [%v]\n", q.chainOfTrustIntact)
+			q.debug("TargetServer is [%s] and backupServers are [%v]\n", targetServer, fallbackServers)
 
 			finalTargetServers := make([]string, 0)
 			finalTargetServers = append(finalTargetServers, targetServer)
@@ -1571,7 +1574,6 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 
 			}
 
-			q.debug("TargetServer is [%s] and backupServers are [%v]\n", targetServer, fallbackServers)
 			/// unfortunately answer/authority/additional combo could not lead directly to a next step IP
 			if targetServer == "" && len(fallbackServers) == 0 {
 				/// check every NS record, as it's possible that the one target host picked does not have a matching A in additional
@@ -1699,6 +1701,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 	/// retry policy: trying backup servers has bigger priority than increasing timeout
 	wantsToErrorOut := false
 	var reply *dns.Msg
+	q.debug("TargetServer is [%s] and backupServers are [%v]\n", targetServer, fallbackServers)
 	for ind, iteratedTargetServer := range finalTargetServers {
 		q.debug(">>> FINAL - Querying [%s] about [%s]<<<\n", iteratedTargetServer, q.vanilla)
 		reply, tw, err = q.simpleResolve(q.vanilla, iteratedTargetServer, q.record, 0)
@@ -1720,7 +1723,6 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 			break
 		}
 	}
-
 	/// launch queries with shamelessly big timeout, don't exit on error (we're already on borrowed bandwidth)
 	if wantsToErrorOut {
 		for ind, iteratedTargetServer := range finalTargetServers {
