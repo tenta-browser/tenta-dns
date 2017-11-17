@@ -856,7 +856,7 @@ func inferCurrentLevel(queryString string, queryType uint16) string {
 
 /// handles one non-recursive query (object & subject) from a specified target
 /// improvement: if server is unknown, do udp (and launch a parallel tls attempt, and save server's attitude towards using tls for future reference)
-func (q *queryParam) simpleResolve(object, target string, subject uint16) (*dns.Msg, time.Duration, *dnsError) {
+func (q *queryParam) simpleResolve(object, target string, subject uint16, suggestedTimeout int) (*dns.Msg, time.Duration, *dnsError) {
 	/// before anything do the dnssec stuff
 	/// if the chain of trust is broken, don't bother tho'
 	/// we do this with a breakable if
@@ -865,7 +865,7 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16) (*dns.
 		currentLevel := inferCurrentLevel(object, subject)
 		/// root zone is level 1
 		q.debug("performing dnssec query.\n")
-		dsr, _, e := q.simpleResolve(currentLevel, target, dns.TypeDNSKEY)
+		dsr, _, e := q.simpleResolve(currentLevel, target, dns.TypeDNSKEY, 0)
 		//q.debug("DNSSEC query:\n%s\n", dsr.String())
 		if e != nil {
 			if forgivingDNSSECCheck {
@@ -985,7 +985,10 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16) (*dns.
 
 	//client.Timeout = 5000 * time.Millisecond
 	//client.UDPSize = 4096
-	client.ReadTimeout = 5 * time.Second
+	client.ReadTimeout = (5 + time.Duration(suggestedTimeout)) * time.Second
+	if suggestedTimeout != 0 {
+		q.debug("Querying with increaset timeout [%d] seconds", 5+suggestedTimeout)
+	}
 	reply, rtt, err := client.Exchange(message, target+port)
 	q.debug("Question was [%s]\n", message.Question[0].String())
 	q.debug(">>> Query response <<<\n%s\n", reply.String())
@@ -1226,7 +1229,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 			finalTargetServers = append(finalTargetServers, fallbackServers...)
 			var reply *dns.Msg
 			for ind, iteratedTargetServer := range finalTargetServers {
-				reply, tw, err = q.simpleResolve(token, iteratedTargetServer, dns.TypeNS)
+				reply, tw, err = q.simpleResolve(token, iteratedTargetServer, dns.TypeNS, 0)
 				q.timeWasted += tw
 				if err != nil {
 					if ind < len(finalTargetServers)-1 {
@@ -1693,10 +1696,12 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 	finalTargetServers := make([]string, 0)
 	finalTargetServers = append(finalTargetServers, targetServer)
 	finalTargetServers = append(finalTargetServers, fallbackServers...)
+	/// retry policy: trying backup servers has bigger priority than increasing timeout
+	wantsToErrorOut := false
 	var reply *dns.Msg
 	for ind, iteratedTargetServer := range finalTargetServers {
 		q.debug(">>> FINAL - Querying [%s] about [%s]<<<\n", iteratedTargetServer, q.vanilla)
-		reply, tw, err = q.simpleResolve(q.vanilla, iteratedTargetServer, q.record)
+		reply, tw, err = q.simpleResolve(q.vanilla, iteratedTargetServer, q.record, 0)
 		q.timeWasted += tw
 		if err != nil {
 			if ind < len(finalTargetServers)-1 {
@@ -1704,12 +1709,40 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 			}
 			q.debug("Problem found:: [%s]\n", err.String())
 			if err.severity > severityNuisance {
+				/// start secondary timeout recovery
+				if strings.HasSuffix(err.Error(), "timeout") {
+					wantsToErrorOut = true
+					break
+				}
 				return nil, err
 			}
 		} else {
 			break
 		}
 	}
+
+	/// launch queries with shamelessly big timeout, don't exit on error (we're already on borrowed bandwidth)
+	if wantsToErrorOut {
+		for ind, iteratedTargetServer := range finalTargetServers {
+			q.debug(">>> FINAL TIMEOUT RECOVERY - Querying [%s] about [%s]<<<\n", iteratedTargetServer, q.vanilla)
+			reply, tw, err = q.simpleResolve(q.vanilla, iteratedTargetServer, q.record, 300)
+			if err != nil {
+				if ind < len(finalTargetServers)-1 {
+					continue
+				}
+				q.debug("Problem found:: [%s]\n", err.String())
+			} else {
+				wantsToErrorOut = false
+				break
+			}
+		}
+	}
+
+	/// if still hasn't been resolved, return last error
+	if wantsToErrorOut {
+		return nil, err
+	}
+
 	q.debug("CD flag is [%v]\n", q.CDFlagSet)
 	// there's no way around it, ned to handle cnames in the final query too
 	finalCnames := make([]*dns.CNAME, 0)
