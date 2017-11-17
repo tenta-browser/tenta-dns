@@ -969,19 +969,19 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16, sugges
 		message.RecursionDesired = false
 
 	}
-	// t, targetCap := hasTLSCapability("common", target, "hasTLSSupport")
-	// q.debug("[%s] TARGET CAP recognized as [%d]\n\n", target, targetCap)
+	_, targetCap := hasTLSCapability("common", target, "hasTLSSupport")
+	q.debug("[%s] TARGET CAP recognized as [%d]\n\n", target, targetCap)
 	client := new(dns.Client)
 
 	port := ""
 	setupDNSClient(client, &port, target, serverCapabilityFalse, preferredProtocol == "tcp", q.provider, q.ips)
 
-	// if targetCap == serverCapabilityUnknown {
-	// 	go func() {
-	// 		/// duration does not matter here so much
-	// 		doTLSDiscovery(target, q.provider)
-	// 	}()
-	// }
+	if targetCap == serverCapabilityUnknown {
+		go func() {
+			/// duration does not matter here so much
+			doTLSDiscovery(target, q.provider, q.ips)
+		}()
+	}
 
 	//client.Timeout = 5000 * time.Millisecond
 	//client.UDPSize = 4096
@@ -1310,11 +1310,11 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 
 			for _, rr := range recordHolder {
 				/// first of all validate RR
-				// if !contextIndependentValidateRR(rr, token) {
-				// 	/// entry point for ns blacklisting (TODO)
-				// 	q.debug("Found malicious RR [%s]. Skipping.\n", rr.String())
-				// 	continue
-				// }
+				if !contextIndependentValidateRR(rr, token) {
+					/// entry point for ns blacklisting (TODO)
+					q.debug("Found malicious RR [%s]. Skipping.\n", rr.String())
+					continue
+				}
 				if ds, ok := rr.(*dns.DS); ok {
 					q.debug("Found DS records")
 					hasDSRecord = true
@@ -1864,7 +1864,7 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 			elogger.Flush(l)
 			rt.SlackWH.SendFeedback(runtime.NewPayload(qp.vanilla, err.String(), ""))
 		} else {
-			l.Infof("ANSWER is: [%v][%v][%s]", resolvTime, qp.timeWasted, answer)
+			elogger.Queuef("ANSWER is: [%v][%v][%s]", resolvTime, qp.timeWasted, answer)
 			response.SetRcode(r, dns.RcodeSuccess)
 		}
 
