@@ -48,6 +48,7 @@ type Runtime struct {
 	started     uint
 	lg          *logrus.Entry
 	RateLimiter *Limiter
+	SlackWH     *Feedback
 }
 
 type finisher func()
@@ -85,6 +86,7 @@ func NewRuntime(cfg Config) *Runtime {
 	}
 
 	rt.IPPool = StartIPPool(cfg.OutboundIPs)
+	rt.SlackWH = StartFeedback(cfg, rt)
 	rt.Stats = StartStats(rt)
 	rt.RateLimiter = StartLimiter(cfg.RateThreshold)
 	rt.AddService()
@@ -145,6 +147,7 @@ func (rt *Runtime) Shutdown() {
 		rt.stop <- true
 	}
 	rt.wg.Wait()
+	rt.SlackWH.Stop()
 	rt.Stats.Stop()
 	rt.DB.Close()
 	rt.lg.Info("Shutdown complete")

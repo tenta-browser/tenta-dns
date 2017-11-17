@@ -1827,6 +1827,7 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 				}
 			}
 			elogger.Flush(l)
+			rt.SlackWH.SendFeedback(runtime.NewPayload(qp.vanilla, err.String(), ""))
 		} else {
 			l.Infof("ANSWER is: [%v][%v][%s]", resolvTime, qp.timeWasted, answer)
 			response.SetRcode(r, dns.RcodeSuccess)
@@ -1859,6 +1860,8 @@ func ServeDNS(cfg runtime.RecursorConfig, rt *runtime.Runtime, v4 bool, net stri
 	lg := nlog.GetLogger("dnsrecursor").WithField("host_name", d.HostName).WithField("address", ip).WithField("port", port).WithField("proto", net)
 	logger.ilog = lg
 
+	rt.SlackWH.SendMessage(fmt.Sprintf("Tenta DNS Operator for %s over %s started up.", provider, net))
+
 	notifyStarted := func() {
 		lg.Infof("Started %s dns recursor on %s", net, addr)
 	}
@@ -1878,6 +1881,7 @@ func ServeDNS(cfg runtime.RecursorConfig, rt *runtime.Runtime, v4 bool, net stri
 	defer rt.OnFinishedOrPanic(func() {
 		srv.Shutdown()
 		lg.Infof("Stopped %s dns resolver on %s", net, addr)
+		rt.SlackWH.SendMessage(fmt.Sprintf("Tenta DNS Operator for %s over %s shutting down.", provider, net))
 	}, pchan)
 
 	if net == "tls" {
