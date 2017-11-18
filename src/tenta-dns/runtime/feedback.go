@@ -35,7 +35,7 @@ import (
 )
 
 type Payload struct {
-	dom, err, stack string
+	operator, dom, err, stack string
 }
 
 type Feedback struct {
@@ -49,15 +49,15 @@ type Feedback struct {
 
 func (p *Payload) ShortEncode() []byte {
 
-	return []byte("payload=" + url.QueryEscape(fmt.Sprintf("{\"text\":\"Error occured resolving domain `%s`\n`%s`\"}", p.dom, p.err)))
+	return []byte("payload=" + url.QueryEscape(fmt.Sprintf("{\"text\":\"Operator `%s` failed to resolve domain `%s`\n`%s`\"}", p.operator, p.dom, p.err)))
 }
 
 func (p *Payload) LongEncode() []byte {
-	return []byte("payload=" + url.QueryEscape(fmt.Sprintf("{\"text\":\"Error occured resolving domain `%s`\n`%s`\n%s\"}", p.dom, p.err, p.stack)))
+	return []byte("payload=" + url.QueryEscape(fmt.Sprintf("{\"text\":\"Operator `%s` failed to resolve domain `%s`\n`%s`\n%s\"}", p.dom, p.err, p.stack)))
 }
 
-func NewPayload(dom, err, stack string) *Payload {
-	return &Payload{dom: dom, err: err, stack: stack}
+func NewPayload(operator, dom, err, stack string) *Payload {
+	return &Payload{operator: operator, dom: dom, err: err, stack: stack}
 }
 
 func StartFeedback(cfg Config, rt *Runtime) *Feedback {
