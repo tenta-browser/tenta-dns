@@ -43,10 +43,14 @@ var (
 	quiet          = flag.Bool("quiet", false, "Don't produce any output to the terminal")
 	verbose        = flag.Bool("verbose", false, "Produce lots of output to the terminal (overrides the -quiet flag)")
 	systemd        = flag.Bool("systemd", false, "Assume running under systemd and send control notifications. NOTE: Behavior is undefined if using this flag without systemd")
+	printver       = flag.Bool("version", false, "Print the version and exit")
 )
 
+var version string
+
 func usage() {
-	fmt.Println("Tenta DNS")
+	fmt.Printf("Tenta DNS %s", version)
+	fmt.Println("")
 	fmt.Println("Full featured DNS server with DNSSEC and DNS-over-TLS")
 	fmt.Println("Options:")
 	flag.PrintDefaults()
@@ -56,6 +60,11 @@ func main() {
 	log.SetLogLevel(logrus.InfoLevel)
 	flag.Usage = usage
 	flag.Parse()
+
+	if *printver {
+		fmt.Println(version)
+		os.Exit(0)
+	}
 
 	if *quiet {
 		log.SetLogLevel(logrus.FatalLevel)

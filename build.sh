@@ -23,4 +23,12 @@ GOPATH=`pwd`
 
 echo "Compiling to $GOPATH/bin"
 
-go install -v tenta-dns
+version="development`date -u +.%Y%m%d.%H%M%S`"
+if [ -n "$BUILD_ID" ]; then
+  version="b${BUILD_ID}"
+fi
+
+echo "Compiling version $version"
+
+go install -ldflags "-X main.version=$version" -v tenta-dns
+go install -ldflags "-X main.version=$version" -v tenta-dns/stresser

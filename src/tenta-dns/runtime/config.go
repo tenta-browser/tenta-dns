@@ -60,6 +60,8 @@ type Config struct {
 	DefaultDnsTcpPort int
 	DefaultDnsTlsPort int
 	RateThreshold     uint64
+	OutboundIPs       []string
+	SlackFeedback     map[string]string
 }
 
 type NSnitchConfig struct {

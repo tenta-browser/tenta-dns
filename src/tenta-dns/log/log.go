@@ -45,7 +45,8 @@ func (l *EventualLogger) Queuef(format string, args ...interface{}) {
 // Flush -- writes out everything from buffer
 func (l *EventualLogger) Flush(target *logrus.Entry) {
 	for _, e := range *l {
-		target.Infof(e)
+		//target.Infof(e)
+		fmt.Printf("%s", e)
 	}
 }
 

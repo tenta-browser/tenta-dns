@@ -25,6 +25,7 @@ package common
 import (
 	"crypto/rand"
 	"math/big"
+	"net"
 	"os"
 	"tenta-dns/log"
 )
@@ -41,4 +42,11 @@ func RandInt(max uint) uint {
 		os.Exit(5)
 	}
 	return uint(bi.Uint64())
+}
+
+func IsPrivateIp(a net.IP) bool {
+	a = a.To4()
+	return a[0] == 10 || // class A private network
+		(a[0] == 172 && a[1] >= 16 && a[1] <= 31) || // class B private networks
+		(a[0] == 192 && a[1] == 168) // class C private networks
 }
