@@ -660,7 +660,7 @@ func setupDNSClient(client *dns.Client, port *string, target string, tlsCapabili
 		}
 		client.Net = "tcp-tls"
 		*port = ":853"
-
+		hostname = strings.TrimRight(hostname, ".")
 		client.TLSConfig = &tls.Config{
 			MinVersion: tls.VersionTLS10,
 			ServerName: hostname,
@@ -974,7 +974,7 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16, sugges
 	client := new(dns.Client)
 
 	port := ""
-	setupDNSClient(client, &port, target, serverCapabilityFalse, preferredProtocol == "tcp", q.provider, q.ips)
+	setupDNSClient(client, &port, target, targetCap, preferredProtocol == "tcp", q.provider, q.ips)
 
 	if targetCap == serverCapabilityUnknown {
 		go func() {
@@ -990,7 +990,7 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16, sugges
 		q.debug("Querying with increaset timeout [%d] seconds", 5+suggestedTimeout)
 	}
 	reply, rtt, err := client.Exchange(message, target+port)
-	q.debug("Question was [%s]\n", message.Question[0].String())
+	q.debug("Question was [%s]\nNet stats: [%s][%s]\n", message.Question[0].String(), target+port, client.Net)
 	q.debug(">>> Query response <<<\n%s\n", reply.String())
 
 	// if message is larger than generic udp packet size 512, retry on tcp
