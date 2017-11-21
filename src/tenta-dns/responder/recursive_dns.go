@@ -1290,7 +1290,11 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 				recordHolder = append(recordHolder, record)
 			}
 			for _, record := range reply.Extra {
-				recordHolder = append(recordHolder, record)
+				_, okOPT := record.(*dns.OPT)
+				_, okTSIG := record.(*dns.TSIG)
+				if !okOPT && !okTSIG {
+					recordHolder = append(recordHolder, record)
+				}
 			}
 
 			foundCNAMEs := make([]*dns.CNAME, 0)
