@@ -1436,13 +1436,17 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 						shortcut, err := qc.doResolve(resolveMethodRecursive)
 						if err != nil {
 							q.debug("Hail Mary failed [%s]\n", err.String())
-							continue // as in take the next record from the reply in the big loop
+							//continue // as in take the next record from the reply in the big loop
+						} else {
+							defer qc.join()
+							q.debug("Tried the good old query-more-tokens-on-soa trick with success.")
+							return shortcut, nil
 						}
-						/// jackpot -- store cache (it advertised itself as authroitative, so ANSWER section should be where data is at)
-						/// caching already handled via doLookup
-						defer qc.join()
-						q.debug("Tried the good old query-more-tokens-on-soa trick with success.")
-						return shortcut, nil
+					}
+
+					if reply.MsgHdr.Rcode == dns.RcodeNameError {
+						q.debug("Explicit nxdomain found, for partial query string. adding more tokens did not work. returning with NXDOMAIN.")
+						return nil, newError(errorUnresolvable, severitySuccess, "domain [%s] is unresolvable", q.vanilla)
 					}
 
 					/// this is the tricky part:
@@ -1855,18 +1859,16 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 		response := new(dns.Msg)
 		if err != nil {
 			elogger.Queuef("RESOLVE RETURNED ERROR [%s]", err.String())
-			if err.errorCode != errorUnresolvable && err.errorCode != errorCannotResolve {
+			if err.errorCode != errorUnresolvable {
 				elogger.Queuef("Failed for [%s -- %d] - [%s]", qp.vanilla, qp.record, err)
 				rt.Stats.Count(StatsQueryFailure)
 				response.SetRcode(r, dns.RcodeServerFailure)
+				rt.SlackWH.SendFeedback(runtime.NewPayload(operatorID, qp.vanilla, err.String(), ""))
 			} else {
 				elogger.Queuef("[%s -- %d] unresolvable.", qp.vanilla, qp.record)
-				if err.errorCode == errorUnresolvable {
-					response.SetRcode(r, dns.RcodeNameError)
-				}
+				response.SetRcode(r, dns.RcodeNameError)
 			}
 			elogger.Flush(l)
-			rt.SlackWH.SendFeedback(runtime.NewPayload(operatorID, qp.vanilla, err.String(), ""))
 		} else {
 			elogger.Queuef("ANSWER is: [%v][%v][%s]", resolvTime, qp.timeWasted, answer)
 			response.SetRcode(r, dns.RcodeSuccess)
