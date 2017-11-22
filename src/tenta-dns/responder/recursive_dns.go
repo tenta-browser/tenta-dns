@@ -1898,8 +1898,8 @@ func ServeDNS(cfg runtime.RecursorConfig, rt *runtime.Runtime, v4 bool, net stri
 	addr := fmt.Sprintf("%s:%d", ip, port)
 	lg := nlog.GetLogger("dnsrecursor").WithField("host_name", d.HostName).WithField("address", ip).WithField("port", port).WithField("proto", net)
 	logger.ilog = lg
-	operator := fmt.Sprintf("%s/%s/%s", provider, net, ip)
-	rt.SlackWH.SendMessage(fmt.Sprintf("Operator `%s` started up.", operator))
+	operator := fmt.Sprintf("%s/%s", provider, net)
+	rt.SlackWH.SendMessage("started up.", operator)
 
 	notifyStarted := func() {
 		lg.Infof("Started %s dns recursor on %s", net, addr)
@@ -1920,7 +1920,7 @@ func ServeDNS(cfg runtime.RecursorConfig, rt *runtime.Runtime, v4 bool, net stri
 	defer rt.OnFinishedOrPanic(func() {
 		srv.Shutdown()
 		lg.Infof("Stopped %s dns resolver on %s", net, addr)
-		rt.SlackWH.SendMessage(fmt.Sprintf("Operator `%s` shutting down.", operator))
+		rt.SlackWH.SendMessage("shutting down.", operator)
 	}, pchan)
 
 	if net == "tls" {

@@ -39,17 +39,21 @@ type Payload struct {
 }
 
 type Feedback struct {
-	nopmode bool
-	msg     chan []byte
-	stop    chan bool
-	wg      *sync.WaitGroup
-	whURL   string
-	l       *logrus.Entry
+	nopmode       bool
+	msg           chan []byte
+	stop          chan bool
+	wg            *sync.WaitGroup
+	nodeId, whURL string
+	l             *logrus.Entry
 }
 
-func (p *Payload) ShortEncode() []byte {
+func formatOperator(base, detail string) string {
+	return fmt.Sprintf("Operator `%s/%s`", base, detail)
+}
 
-	return []byte("payload=" + url.QueryEscape(fmt.Sprintf("{\"text\":\"Operator `%s` failed to resolve domain `%s`\n`%s`\"}", p.operator, p.dom, p.err)))
+func (p *Payload) ShortEncode(op string) []byte {
+
+	return []byte("payload=" + url.QueryEscape(fmt.Sprintf("{\"text\":\"%s failed to resolve domain `%s`\n`%s`\"}", op, p.dom, p.err)))
 }
 
 func (p *Payload) LongEncode() []byte {
@@ -68,6 +72,11 @@ func StartFeedback(cfg Config, rt *Runtime) *Feedback {
 		f.msg = make(chan []byte)
 		f.stop = make(chan bool)
 		f.whURL = t
+		if nodeId, ok := cfg.SlackFeedback["node"]; ok {
+			f.nodeId = nodeId
+		} else {
+			f.nodeId = "placeholder"
+		}
 		f.l = log.GetLogger("feedback")
 		wg := &sync.WaitGroup{}
 		f.wg = wg
@@ -80,13 +89,13 @@ func StartFeedback(cfg Config, rt *Runtime) *Feedback {
 
 func (f *Feedback) SendFeedback(p *Payload) {
 	if !f.nopmode {
-		f.msg <- p.ShortEncode()
+		f.msg <- p.ShortEncode(formatOperator(f.nodeId, p.operator))
 	}
 }
 
-func (f *Feedback) SendMessage(s string) {
+func (f *Feedback) SendMessage(s, opDetails string) {
 	if !f.nopmode {
-		m := "payload=" + url.QueryEscape(fmt.Sprintf("{\"text\": \"%s\"}", s))
+		m := "payload=" + url.QueryEscape(fmt.Sprintf("{\"text\": \"%s -- %s\"}", formatOperator(f.nodeId, opDetails), s))
 		f.msg <- []byte(m)
 	}
 }
