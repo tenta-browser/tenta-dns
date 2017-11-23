@@ -681,6 +681,7 @@ func setupDNSClient(client *dns.Client, port *string, target string, tlsCapabili
 				tls.TLS_RSA_WITH_3DES_EDE_CBC_SHA,
 			},
 		}
+		needsTCP = true
 
 	} else if needsTCP {
 		client.Net = "tcp"
@@ -707,9 +708,9 @@ func doTLSDiscovery(target, provider string, ips *runtime.Pool) (tw time.Duratio
 	port := ""
 	setupDNSClient(c, &port, target, serverCapabilityTrue, false, provider, ips)
 	//c.Timeout = 3 * time.Second
-	reply, _, err := c.Exchange(m, target+port)
+	_, _, err := c.Exchange(m, target+port)
 	if err != nil {
-		logger.debug("DISCOVERY :: ERROR [%s]: [%s]", target+port, err)
+		// logger.debug("DISCOVERY :: ERROR [%s]: [%s]", target+port, err)
 		t, err := storeCache("common", target, []cacheItem{cacheItem{key: "hasTLSSupport", value: "false"}})
 		tw += t
 		if err != nil {
@@ -718,7 +719,7 @@ func doTLSDiscovery(target, provider string, ips *runtime.Pool) (tw time.Duratio
 		return
 	}
 	/// TODO -- add non-anonymized stats for dns-over-tls support
-	logger.debug("DISCOVERY SUCCESS :[%s]: [%s]", target+port, reply.String())
+	// logger.debug("DISCOVERY SUCCESS :[%s]: [%s]", target+port, reply.String())
 	/// at this point the query is a success -> save tls cap to cache
 	t, derr := storeCache("common", target, []cacheItem{cacheItem{key: "hasTLSSupport", value: "true"}})
 	tw += t
