@@ -149,7 +149,7 @@ type queryParam struct {
 	elog                  *nlog.EventualLogger /// this one will be shown if certain conditions are met
 	provider              string
 	authority, additional *[]dns.RR
-	ips                   *runtime.Pool
+	rt                    *runtime.Runtime
 }
 
 /// 2 structs to help parse xml response from iana -- root zone trust anchor
@@ -167,7 +167,7 @@ type resultData struct {
 }
 
 func (q *queryParam) newContinationParam(rangeLimit int, serverHint string) *queryParam {
-	return &queryParam{q.vanilla, q.tokens, q.record, true, rangeLimit, serverHint, q.CDFlagSet, nil, q.history, q.logBuffer, 0, q.chainOfTrustIntact, q, q.ilog, q.elog, q.provider, q.authority, q.additional, q.ips}
+	return &queryParam{q.vanilla, q.tokens, q.record, true, rangeLimit, serverHint, q.CDFlagSet, nil, q.history, q.logBuffer, 0, q.chainOfTrustIntact, q, q.ilog, q.elog, q.provider, q.authority, q.additional, q.rt}
 }
 
 /// fork-join scheme for lookup continuations
@@ -264,7 +264,7 @@ func (e *dnsError) String() string {
 
 /// assumes domain is valid (eg. tenta.io, asd.qwe.zxc.lol)
 /// dnssec is on by default
-func newQueryParam(vanilla string, record uint16, ilog *logrus.Entry, elog *nlog.EventualLogger, provider string, ips *runtime.Pool) *queryParam {
+func newQueryParam(vanilla string, record uint16, ilog *logrus.Entry, elog *nlog.EventualLogger, provider string, rt *runtime.Runtime) *queryParam {
 	if dns.IsFqdn(vanilla) {
 		vanilla = vanilla[:len(vanilla)-1]
 	}
@@ -273,7 +273,7 @@ func newQueryParam(vanilla string, record uint16, ilog *logrus.Entry, elog *nlog
 	for i := len(temp) - 1; i >= 0; i-- {
 		tokens[len(temp)-i-1] = strings.Join(temp[i:len(temp)], ".") + "."
 	}
-	return &queryParam{dns.Fqdn(vanilla), tokens, record, false, 0, "", false, nil, make([]historyItem, 0), new(bytes.Buffer), 0, true, nil, ilog, elog, provider, new([]dns.RR), new([]dns.RR), ips}
+	return &queryParam{dns.Fqdn(vanilla), tokens, record, false, 0, "", false, nil, make([]historyItem, 0), new(bytes.Buffer), 0, true, nil, ilog, elog, provider, new([]dns.RR), new([]dns.RR), rt}
 }
 
 /// define it here for short term clarity
@@ -641,7 +641,7 @@ func hasTLSCapability(provider, domain, key string) (time.Duration, int) {
 }
 
 /// TODO
-func setupDNSClient(client *dns.Client, port *string, target string, tlsCapability int, needsTCP bool, provider string, ips *runtime.Pool) (tw time.Duration) {
+func setupDNSClient(client *dns.Client, port *string, target string, tlsCapability int, needsTCP bool, provider string, rt *runtime.Runtime) (tw time.Duration) {
 	if tlsCapability == serverCapabilityTrue {
 		hostname := target
 		// hostnameAvailable := false
@@ -692,21 +692,21 @@ func setupDNSClient(client *dns.Client, port *string, target string, tlsCapabili
 	}
 
 	if needsTCP {
-		client.Dialer = ips.RandomizeTCPDialer()
+		client.Dialer = rt.IPPool.RandomizeTCPDialer()
 	} else {
-		client.Dialer = ips.RandomizeUDPDialer()
+		client.Dialer = rt.IPPool.RandomizeUDPDialer()
 	}
 
 	return
 }
 
 /// a simple tls based discovery query
-func doTLSDiscovery(target, provider string, ips *runtime.Pool) (tw time.Duration) {
+func doTLSDiscovery(target, provider string, rt *runtime.Runtime) (tw time.Duration) {
 	m := new(dns.Msg)
 	m.SetQuestion(".", dns.TypeNULL)
 	c := new(dns.Client)
 	port := ""
-	setupDNSClient(c, &port, target, serverCapabilityTrue, false, provider, ips)
+	setupDNSClient(c, &port, target, serverCapabilityTrue, false, provider, rt)
 	//c.Timeout = 3 * time.Second
 	_, _, err := c.Exchange(m, target+port)
 	if err != nil {
@@ -975,12 +975,12 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16, sugges
 	client := new(dns.Client)
 
 	port := ""
-	setupDNSClient(client, &port, target, targetCap, preferredProtocol == "tcp", q.provider, q.ips)
+	setupDNSClient(client, &port, target, targetCap, preferredProtocol == "tcp", q.provider, q.rt)
 
 	if targetCap == serverCapabilityUnknown {
 		go func() {
 			/// duration does not matter here so much
-			doTLSDiscovery(target, q.provider, q.ips)
+			doTLSDiscovery(target, q.provider, q.rt)
 		}()
 	}
 
@@ -997,7 +997,7 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16, sugges
 	// if message is larger than generic udp packet size 512, retry on tcp
 	if err == dns.ErrTruncated {
 		q.debug("Retrying on TCP. Stay tuned.\n")
-		setupDNSClient(client, &port, target, serverCapabilityFalse, true, q.provider, q.ips)
+		setupDNSClient(client, &port, target, serverCapabilityFalse, true, q.provider, q.rt)
 		reply, rtt, err = client.Exchange(message, target+port)
 	}
 
@@ -1345,7 +1345,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 						/// we have a NS record without glue, so we go ahead and take the time to resolve it
 						/// because there are surprisingly many cases in which one NS has A record, and it times out often (logically)
 						q.debug("\n\n\nLAUNCHING PEDANTIC INTERMEDIARY RESOLVE FOR [%s]\n\n\n", ns.Ns)
-						qIntermediary := newQueryParam(ns.Ns, dns.TypeA, q.ilog, q.elog, q.provider, q.ips)
+						qIntermediary := newQueryParam(ns.Ns, dns.TypeA, q.ilog, q.elog, q.provider, q.rt)
 						additional, e = qIntermediary.doResolve(resolveMethodRecursiveNonPedantic)
 						if e != nil {
 							q.debug("Cannot resolve intermediary NS [%s]\n", ns.Ns)
@@ -1497,7 +1497,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 
 								if len(cnameSlice) > 0 {
 									finalTarget := untangleCNAMEindirections(token, cnameSlice)
-									soaDerefCont := newQueryParam(finalTarget.Target, q.record, q.ilog, q.elog, q.provider, q.ips)
+									soaDerefCont := newQueryParam(finalTarget.Target, q.record, q.ilog, q.elog, q.provider, q.rt)
 									soaDerefRes, err := soaDerefCont.doResolve(resolveMethodRecursive)
 									q.logBuffer.Write(soaDerefCont.logBuffer.Bytes())
 									q.timeWasted += soaDerefCont.timeWasted
@@ -1564,7 +1564,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 				q.timeWasted += tw
 				/// this is not cool, we'll have to resolve the canonical name to get a usable ip address
 				q.debug("Going further down the rabbithole, via CNAME redirection [%s]\n", cname.Target)
-				newq := newQueryParam(cname.Target, q.record, q.ilog, q.elog, q.provider, q.ips)
+				newq := newQueryParam(cname.Target, q.record, q.ilog, q.elog, q.provider, q.rt)
 				cnameDereference, err := newq.doResolve(resolveMethodRecursive)
 				q.logBuffer.Write(newq.logBuffer.Bytes())
 				/// this is an aggregated check for no error, and no nxdomain (et al)
@@ -1665,7 +1665,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 					if tHost != "" {
 						q.debug("Trying to resolve eluding host. Launching sub-resolve for [%s]\n\n", tHost)
 						/// resolve meaning A record, to be used further
-						newq := newQueryParam(tHost, dns.TypeA, q.ilog, q.elog, q.provider, q.ips)
+						newq := newQueryParam(tHost, dns.TypeA, q.ilog, q.elog, q.provider, q.rt)
 						_targetServer, err := newq.doResolve(resolveMethodRecursive)
 						q.logBuffer.Write(newq.logBuffer.Bytes())
 						if err != nil {
@@ -1774,7 +1774,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 	if len(finalCnames) > 0 && q.record != dns.TypeCNAME {
 		q.debug("Final query CNAME caught, and handled.\n")
 		lastCNAME := untangleCNAMEindirections(q.vanilla, finalCnames)
-		qfinal := newQueryParam(lastCNAME.Target, q.record, q.ilog, q.elog, q.provider, q.ips)
+		qfinal := newQueryParam(lastCNAME.Target, q.record, q.ilog, q.elog, q.provider, q.rt)
 		//qfinal.addToResultSet(finalCnameRR)
 		res, err := qfinal.doResolve(resolveMethodRecursive)
 		q.logBuffer.Write(qfinal.logBuffer.Bytes())
@@ -1848,7 +1848,7 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 		l = l.WithField("domain", r.Question[0].Name)
 		elogger := new(nlog.EventualLogger)
 		elogger.Queuef("%v -- STARTING NEW TOPLEVEL RESOLVE FOR [%s][RecDesired - %v]", time.Now(), r.Question[0].Name, r.RecursionDesired)
-		qp := newQueryParam(r.Question[0].Name, r.Question[0].Qtype, l, elogger, provider, rt.IPPool)
+		qp := newQueryParam(r.Question[0].Name, r.Question[0].Qtype, l, elogger, provider, rt)
 		qp.CDFlagSet = r.CheckingDisabled
 		resolveMethodToUse := resolveMethodRecursive
 		if r.RecursionDesired == false {
@@ -1910,7 +1910,7 @@ func ServeDNS(cfg runtime.RecursorConfig, rt *runtime.Runtime, v4 bool, net stri
 	lg.Debugf("Preparing %s dns recursor on %s", net, addr)
 
 	if dnssecMode {
-		if e := getTrustedRootAnchors(lg, provider, rt.IPPool); e != nil {
+		if e := getTrustedRootAnchors(lg, provider, rt); e != nil {
 			panic(fmt.Sprintf("Cannot obtain root trust anchors. [%v]\n", e))
 		}
 	}

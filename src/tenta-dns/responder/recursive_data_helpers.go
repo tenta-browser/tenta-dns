@@ -25,7 +25,7 @@ func equalsDS(a, b *dns.DS) bool {
 }
 
 // Download trust anchors
-func getTrustedRootAnchors(l *logrus.Entry, provider string, ips *runtime.Pool) error {
+func getTrustedRootAnchors(l *logrus.Entry, provider string, rt *runtime.Runtime) error {
 	rootDS := make([]dns.RR, 0)
 
 	if provider == "tenta" {
@@ -55,7 +55,7 @@ func getTrustedRootAnchors(l *logrus.Entry, provider string, ips *runtime.Pool) 
 		}
 
 	} else if provider == "opennic" {
-		q := newQueryParam(".", dns.TypeDNSKEY, l, new(log.EventualLogger), provider, ips)
+		q := newQueryParam(".", dns.TypeDNSKEY, l, new(log.EventualLogger), provider, rt)
 		krr, e := q.doResolve(resolveMethodFinalQuestion)
 		if e != nil {
 			return fmt.Errorf("Cannot get opennic root keys. [%s]", e.Error())
