@@ -1728,6 +1728,9 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 				}
 				return nil, err
 			}
+		} else if len(reply.Answer) == 0 {
+			q.debug("Empty response means try another server")
+			continue
 		} else {
 			break
 		}
@@ -1883,6 +1886,7 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 		response.Answer = answer
 		response.Ns = *qp.authority
 		response.Extra = *qp.additional
+		response.SetEdns0(4096, false)
 		w.WriteMsg(response)
 	}
 }
