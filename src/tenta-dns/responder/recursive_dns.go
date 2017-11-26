@@ -1337,7 +1337,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 						q.debug("Explicit nxdomain found, for full query string. returning immediately.")
 						return nil, newError(errorUnresolvable, severitySuccess, "domain [%s] is unresolvable", q.vanilla)
 					}
-
+					nxdomainOnFullString := false
 					q.storeCache(q.provider, soa.Hdr.Name, []dns.RR{soa})
 					if token != q.vanilla {
 						/// add negative cache entry as stated in soa record.
@@ -1354,6 +1354,9 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 						shortcut, err := qc.doResolve(resolveMethodRecursive)
 						if err != nil {
 							q.debug("Hail Mary failed [%s]\n", err.String())
+							if err.errorCode == errorUnresolvable {
+								nxdomainOnFullString = true
+							}
 							//continue // as in take the next record from the reply in the big loop
 						} else {
 							defer qc.join()
@@ -1361,8 +1364,8 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 							return shortcut, nil
 						}
 					}
-
-					if reply.MsgHdr.Rcode == dns.RcodeNameError {
+					/// extend this condition with NXDOMAIN on full query string
+					if reply.MsgHdr.Rcode == dns.RcodeNameError || nxdomainOnFullString {
 						q.debug("Explicit nxdomain found, for partial query string. adding more tokens did not work. returning with NXDOMAIN.")
 						return nil, newError(errorUnresolvable, severitySuccess, "domain [%s] is unresolvable", q.vanilla)
 					}
