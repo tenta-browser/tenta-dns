@@ -1159,6 +1159,9 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 						q.debug("Error in siple resolve. returning with error.")
 						return nil, err
 					}
+				} else if len(reply.Answer)+len(reply.Ns) == 0 {
+					q.debug("Empty response (ANSWER+AUTHORITY) means try another server")
+					continue
 				} else {
 					break
 				}
