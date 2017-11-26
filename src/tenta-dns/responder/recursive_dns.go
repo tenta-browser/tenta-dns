@@ -1214,7 +1214,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 					recordHolder = append(recordHolder, record)
 				}
 			}
-			q.debug("Record holder has [%s] elements.\n", len(recordHolder))
+			q.debug("Record holder has [%d] elements.\n", len(recordHolder))
 			foundCNAMEs := make([]*dns.CNAME, 0)
 
 			/// this is a sloppy variant of the return SOA on intermediary queries
@@ -1335,6 +1335,8 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 					if token == q.vanilla && reply.MsgHdr.Rcode == dns.RcodeNameError {
 						/// entry point for negative caching!!! (todo)
 						q.debug("Explicit nxdomain found, for full query string. returning immediately.")
+						/// transferring this here SOA to the result set
+						*q.authority = []dns.RR{rr}
 						return nil, newError(errorUnresolvable, severitySuccess, "domain [%s] is unresolvable", q.vanilla)
 					}
 					nxdomainOnFullString := false
@@ -1356,6 +1358,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 							q.debug("Hail Mary failed [%s]\n", err.String())
 							if err.errorCode == errorUnresolvable {
 								nxdomainOnFullString = true
+								*q.authority = *qc.authority
 							}
 							//continue // as in take the next record from the reply in the big loop
 						} else {
