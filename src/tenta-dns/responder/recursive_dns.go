@@ -299,17 +299,7 @@ func storeCache(provider, domain string, _recordLiteral interface{}) (time.Durat
 		}
 		ulteriorRR := make([]dns.RR, 0)
 		ulteriorDomain := make([]string, 0)
-		//
 		t := cache2go.Cache(provider + "/" + domain)
-		// err := db.Update(func(tx *bolt.Tx) error {
-		// pb, _ := tx.CreateBucketIfNotExists([]byte(provider))
-		// b, err := pb.CreateBucketIfNotExists([]byte(domain))
-		// if err != nil {
-		// 	return fmt.Errorf("cannot open bucket [%s] [%s]", domain, err)
-		// }
-		/// first run: handle A
-		/// next round: NS, CNAME
-		/// ... handle ttls
 		lockwait := time.Now()
 		retDuration += time.Now().Sub(lockwait)
 		for _, rr := range recordLiteral {
@@ -321,21 +311,9 @@ func storeCache(provider, domain string, _recordLiteral interface{}) (time.Durat
 					ulteriorDomain = append(ulteriorDomain, ptr.Header().Name)
 				}
 			}
-			// timeBytes, _ := time.Now().Add(time.Duration(rr.Header().Ttl) * time.Second).MarshalText()
-			// logger.debug("Trying to store [%s/%s] [%v] for [%d]\n", provider, domain, rr, rr.Header().Ttl)
 			strToAdd := strings.ToLower(rr.String())
 			t.Add(strToAdd, time.Duration(rr.Header().Ttl+1)*time.Second, nil)
 		}
-		/// shortcut ttl out so no RR scanning steps are needed to determine cache freshness
-		/// save the RR in string form, instead of wire form, it's just faster
-		//b.Put([]byte(rr.String()), timeBytes)
-		// }
-		// }
-		// return nil
-		// })
-		// if err != nil {
-		// 	return retDuration, newError(errorCacheWriteError, severityMajor, "cannot write cache [%s/%s] [%s]", provider, domain, err)
-		// }
 
 		for i, ptr := range ulteriorRR {
 			storeCache(provider, ulteriorDomain[i], []dns.RR{ptr})
@@ -346,25 +324,12 @@ func storeCache(provider, domain string, _recordLiteral interface{}) (time.Durat
 			// too chatty?
 			return retDuration, newError(errorInvalidArgument, severityMajor, "invalid argument [%s/%s] expected []string got %s ", provider, domain, reflect.TypeOf(_recordLiteral).String())
 		}
-		//err := db.Update(func(tx *bolt.Tx) error {
 		com := cache2go.Cache(provider + "/" + domain)
-		// pb, _ := tx.CreateBucketIfNotExists([]byte(provider))
-		// b, err := pb.CreateBucketIfNotExists([]byte(domain))
-		// if err != nil {
-		// 	return fmt.Errorf("cannot open bucket [%s] [%s]", domain, err)
-		// }
 		lockwait := time.Now()
 		retDuration += time.Now().Sub(lockwait)
 		for _, item := range recordLiteral {
-			// q.debug("saving item: [%s-%s-%s] -> [%s]\n", provider, domain, item.key, item.value)
-			//err := b.Put([]byte(item.key), []byte(item.value))
 			com.Add(item.key, 0, item.value)
 		}
-		// 	return nil
-		// })
-		// if err != nil {
-		// 	return retDuration, newError(errorCacheWriteError, severityMajor, "cannot write cache [%s/%s] [%s]", provider, domain, err)
-		// }
 	}
 	return retDuration, nil
 }
@@ -429,7 +394,6 @@ func (q *queryParam) storeCache(provider, domain string, _recordLiteral interfac
 func (q *queryParam) retrieveCache(provider, domain string, recordType uint16) (retrr []dns.RR, retDuration time.Duration, e *dnsError) {
 	retrr = make([]dns.RR, 0)
 	cacheTab := cache2go.Cache(provider + "/" + domain)
-
 	if provider == dnsProviderTenta || provider == dnsProviderOpennic {
 		allTrue := true
 		cacheTab.Foreach(func(key interface{}, data *cache2go.CacheItem) {
@@ -478,7 +442,6 @@ func (q *queryParam) retrieveCache(provider, domain string, recordType uint16) (
 		return nil, retDuration, newError(errorCacheReadError, severityMajor, "cache entry not found [%s -- %s]", provider, domain)
 	}
 	return retrr, retDuration, nil
-
 }
 
 /// ulteriorly, will return a whole RR line (or more, in fact), if matches the type
@@ -487,20 +450,6 @@ func retrieveCache(provider, domain string, recordType uint16) (retrr []dns.RR, 
 	cacheTab := cache2go.Cache(provider + "/" + domain)
 
 	if provider == dnsProviderTenta || provider == dnsProviderOpennic {
-		// records := make([]string, 0)
-
-		//lockwait := time.Now()
-		// err := db.View(func(tx *bolt.Tx) error {
-		//retDuration += time.Now().Sub(lockwait)
-		// pb := tx.Bucket([]byte(provider))
-		// if pb == nil {
-		// 	return newError(errorCacheMiss, severitySuccess, "cache miss [%s]", domain)
-		// }
-		// b := pb.Bucket([]byte(domain))
-		// if b == nil {
-		// 	return newError(errorCacheMiss, severitySuccess, "cache miss [%s]", domain)
-		// }
-		//c := b.Cursor()
 		cacheTab.Foreach(func(key interface{}, data *cache2go.CacheItem) {
 			rrString, ok := key.(string)
 			if !ok {
@@ -529,41 +478,6 @@ func retrieveCache(provider, domain string, recordType uint16) (retrr []dns.RR, 
 			}
 
 		})
-		// for k, v := c.First(); k != nil; k, v = c.Next() {
-		// 	// rr, err := dns.NewRR(string(k))
-		// 	records = append(records, string(k))
-		// }
-
-		// 	return nil
-		// })
-
-		// if err != nil || len(records) == 0 {
-		// 	return nil, retDuration, newError(errorCacheReadError, severityMajor, "cannot read cache [%s/%s]", provider, domain)
-		// }
-
-		/// if it wasn't found let's try other means to achieve success
-		// and retrr is obviously nil...
-		// for _, rrString := range records {
-		// 	//rr, _, _ := dns.UnpackRR([]byte(rrString), 0)
-		// 	rr, err := dns.NewRR(string(rrString))
-		// 	if err != nil {
-		// 		continue
-		// 	}
-		// 	/// if record is of desired type, let's put it in the result slice
-		// 	if rr.Header().Rrtype == recordType {
-		// 		retrr = append(retrr, rr)
-		// 	}
-		// 	/// follow through CNAME redirection, unless of course CNAME is whate we're looking for
-		// 	if rr.Header().Rrtype == dns.TypeCNAME && recordType != dns.TypeCNAME {
-		// 		logger.debug("Doing the cname dereference. [%s]->[%s]\n", domain, rr.(*dns.CNAME).Target)
-		// 		derefRR, tdur, er := retrieveCache(provider, rr.(*dns.CNAME).Target, recordType)
-		// 		retDuration += tdur
-		// 		if er == nil {
-		// 			/// adding CNAME dereference to the final result (for context for the final host/record tuple)
-		// 			retrr = append(retrr, derefRR...)
-		// 		}
-		// 	}
-		// }
 	}
 	if len(retrr) == 0 {
 		return nil, retDuration, newError(errorCacheReadError, severityMajor, "cache entry not found [%s -- %s]", provider, domain)
@@ -1867,7 +1781,7 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 				elogger.Queuef("Failed for [%s -- %d] - [%s]", qp.vanilla, qp.record, err)
 				rt.Stats.Count(StatsQueryFailure)
 				response.SetRcode(r, dns.RcodeServerFailure)
-				rt.SlackWH.SendFeedback(runtime.NewPayload(operatorID, qp.vanilla, err.String(), ""))
+				rt.SlackWH.SendFeedback(runtime.NewPayload(operatorID, fmt.Sprintf("%s [%s]", qp.vanilla, dns.TypeToString[r.Question[0].Qtype]), err.String(), ""))
 			} else {
 				elogger.Queuef("[%s -- %d] unresolvable.", qp.vanilla, qp.record)
 				response.SetRcode(r, dns.RcodeNameError)
