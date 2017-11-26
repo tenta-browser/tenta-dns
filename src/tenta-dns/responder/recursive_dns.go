@@ -1211,7 +1211,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 					recordHolder = append(recordHolder, record)
 				}
 			}
-
+			q.debug("Record holder has [%s] elements.\n", len(recordHolder))
 			foundCNAMEs := make([]*dns.CNAME, 0)
 
 			/// this is a sloppy variant of the return SOA on intermediary queries
