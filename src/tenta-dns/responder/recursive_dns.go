@@ -918,9 +918,9 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16, sugges
 	if err != nil {
 		return nil, 0, newError(errorCannotResolve, severityFatal, "simpleResolve failed. [%s]", err)
 	} else if reply.Rcode == dns.RcodeServerFailure {
-		return nil, 0, newError(errorCannotResolve, severityNuisance, "simpleResolve got SERVFAIL.")
+		return nil, 0, newError(errorCannotResolve, severityMajor, "simpleResolve got SERVFAIL.")
 	} else if reply.Rcode == dns.RcodeRefused {
-		return nil, 0, newError(errorCannotResolve, severityNuisance, "simpleResolve got REFUSED.")
+		return nil, 0, newError(errorCannotResolve, severityMajor, "simpleResolve got REFUSED.")
 	}
 
 	q.debug("Dns rountrip time is [%v]\n", rtt)
@@ -1216,6 +1216,12 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 			}
 			q.debug("Record holder has [%d] elements.\n", len(recordHolder))
 			foundCNAMEs := make([]*dns.CNAME, 0)
+
+			/// handle the case of NXDOMAIN without accompanying SOA record (<random_alphanum>.dns.grc.com for NS query)
+			/// we have to return and empty NXDOMAIN (TODO: do a lookup for SOA to return?)
+			if len(recordHolder) == 0 && token == q.vanilla && reply.Rcode == dns.RcodeNameError {
+				return []dns.RR{}, newError(errorUnresolvable, severityMajor, "intermediary lookup is NXDOMAIN [%s]", token)
+			}
 
 			/// this is a sloppy variant of the return SOA on intermediary queries
 			if len(recordHolder) == 0 && token != q.vanilla {
