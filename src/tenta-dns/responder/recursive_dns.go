@@ -1651,7 +1651,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 				}
 				return nil, err
 			}
-		} else if len(reply.Answer) == 0 {
+		} else if len(reply.Answer)+len(reply.Ns) == 0 {
 			q.debug("Empty response means try another server")
 			continue
 		} else {
@@ -1712,14 +1712,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 
 	/// if ANSWER section is empty, return last result (which is 0 answer, and 1 authority (SOA))
 	if len(resultRR) == 0 {
-		*q.authority = make([]dns.RR, len(reply.Ns))
-		*q.additional = make([]dns.RR, len(reply.Extra))
-		for i, rr := range reply.Ns {
-			(*q.authority)[i], _ = dns.NewRR(rr.String())
-		}
-		for i, rr := range reply.Extra {
-			(*q.additional)[i], _ = dns.NewRR(rr.String())
-		}
+		*q.authority = reply.Ns
 		fmt.Printf("Copying [%d] records\n", len(reply.Ns)+len(reply.Extra))
 		return resultRR, nil
 	}
@@ -1790,7 +1783,8 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 				elogger.Queuef("Failed for [%s -- %d] - [%s]", qp.vanilla, qp.record, err)
 				rt.Stats.Count(StatsQueryFailure)
 				response.SetRcode(r, dns.RcodeServerFailure)
-				rt.SlackWH.SendFeedback(runtime.NewPayload(operatorID, fmt.Sprintf("%s [%s]", qp.vanilla, dns.TypeToString[r.Question[0].Qtype]), err.String(), ""))
+				rt.SlackWH.SendFeedback(runtime.NewPayload(operatorID, fmt.Sprintf("%s [%s/RD=%v/CD=%v]",
+					qp.vanilla, dns.TypeToString[r.Question[0].Qtype], r.RecursionDesired, r.CheckingDisabled), err.String(), ""))
 			} else {
 				elogger.Queuef("[%s -- %d] unresolvable.", qp.vanilla, qp.record)
 				response.SetRcode(r, dns.RcodeNameError)
