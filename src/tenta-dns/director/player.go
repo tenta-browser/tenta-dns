@@ -23,7 +23,6 @@
 package director
 
 import (
-	"sync/atomic"
 	"tenta-dns/runtime"
 	"time"
 )
@@ -62,16 +61,16 @@ func (p *player) start() {
 	p.running = true
 	p.started = time.Now()
 	go func() {
-		defer func() {
-			p.running = false
-			if rcv := recover(); rcv != nil {
-				if p.cl != nil {
-					p.cl()
-				}
-				atomic.AddUint32(&p.fails, 1)
-				p.dnotify <- failure{p, rcv}
-			}
-		}()
+		// defer func() {
+		// 	p.running = false
+		// 	if rcv := recover(); rcv != nil {
+		// 		if p.cl != nil {
+		// 			p.cl()
+		// 		}
+		// 		atomic.AddUint32(&p.fails, 1)
+		// 		p.dnotify <- failure{p, rcv}
+		// 	}
+		// }()
 		p.st()
 	}()
 }
