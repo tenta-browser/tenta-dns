@@ -1680,6 +1680,12 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 		return nil, err
 	}
 
+	/// due to refused or any other issue that is considered error by simpleResolve()
+	/// just return an empty result set
+	if reply == nil {
+		return []dns.RR{}, nil
+	}
+
 	q.debug("CD flag is [%v]\n", q.CDFlagSet)
 	// there's no way around it, ned to handle cnames in the final query too
 	finalCnames := make([]*dns.CNAME, 0)
