@@ -954,7 +954,7 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16, sugges
 
 	/// some cases partial support for EDNS0 can yield a FORMERR to EDNS queries
 	/// wiping EDNS0 OPTS from ADDITIONAL section
-	if reply.Rcode == dns.RcodeFormatError {
+	if reply != nil && reply.Rcode == dns.RcodeFormatError {
 		q.debug("FORMERR caught -- retrying without edns0.\n")
 		message.Extra = []dns.RR{}
 		reply, rtt, err = client.Exchange(message, target+port)
