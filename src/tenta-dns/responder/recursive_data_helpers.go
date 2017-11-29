@@ -89,7 +89,7 @@ func transferRootZone(l *logrus.Entry, provider string) error {
 		}
 		for _, rr := range env.RR {
 			switch rr.(type) {
-			case *dns.A, *dns.AAAA, *dns.NS:
+			case *dns.A, *dns.AAAA, *dns.NS, *dns.DS, *dns.DNSKEY:
 				storeCache(provider, rr.Header().Name, []dns.RR{rr})
 			}
 		}

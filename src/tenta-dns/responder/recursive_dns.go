@@ -188,7 +188,7 @@ func (q *queryParam) debug(format string, args ...interface{}) {
 }
 
 func (q *queryParam) setChainOfTrust(b bool) {
-	// q.debug("\n\n\nSetting [%v] for chain of trust!!!\n\n\n\n", b)
+	q.debug("Setting [%v] for chain of trust!!!\n", b)
 	q.chainOfTrustIntact = b
 }
 
@@ -311,7 +311,14 @@ func storeCache(provider, domain string, _recordLiteral interface{}) (time.Durat
 					ulteriorDomain = append(ulteriorDomain, ptr.Header().Name)
 				}
 			}
-			strToAdd := strings.ToLower(rr.String())
+			var strToAdd string
+			switch rr.(type) {
+			case *dns.RRSIG, *dns.DNSKEY, *dns.TSIG, *dns.DS:
+				strToAdd = rr.String()
+			default:
+				strToAdd = strings.ToLower(rr.String())
+			}
+
 			t.Add(strToAdd, time.Duration(rr.Header().Ttl+1)*time.Second, nil)
 		}
 
@@ -367,7 +374,13 @@ func (q *queryParam) storeCache(provider, domain string, _recordLiteral interfac
 
 			// timeBytes, _ := time.Now().Add(time.Duration(rr.Header().Ttl) * time.Second).MarshalText()
 			q.debug("Trying to store [%s/%s] [%v] for [%d]\n", provider, domain, rr, rr.Header().Ttl)
-			strToAdd := strings.ToLower(rr.String())
+			var strToAdd string
+			switch rr.(type) {
+			case *dns.RRSIG, *dns.DNSKEY, *dns.TSIG, *dns.DS:
+				strToAdd = rr.String()
+			default:
+				strToAdd = strings.ToLower(rr.String())
+			}
 			t.Add(strToAdd, time.Duration(rr.Header().Ttl+1)*time.Second, q.chainOfTrustIntact)
 		}
 		for i, ptr := range ulteriorRR {
@@ -682,6 +695,10 @@ func (q *queryParam) validateSignatures(keyR []*dns.DNSKEY, fullMsg *dns.Msg) er
 		return nil
 	}
 
+	for _, dnskey := range keyR {
+		q.debug("Validating with key [%d][%s]\n", dnskey.KeyTag(), dnskey.String())
+	}
+
 	for _, rr := range rrMap[dns.TypeRRSIG] {
 		rrsig := rr.(*dns.RRSIG)
 		key := findKeyWithTag(keyR, rrsig.KeyTag)
@@ -776,10 +793,11 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16, sugges
 	/// if the chain of trust is broken, don't bother tho'
 	/// we do this with a breakable if
 	/// and we calculate current level in dns hierarchy
+	currentLevel := ""
 	for q.chainOfTrustIntact && subject != dns.TypeDNSKEY {
-		currentLevel := inferCurrentLevel(object, subject)
+		currentLevel = inferCurrentLevel(object, subject)
 		/// root zone is level 1
-		q.debug("performing dnssec query.\n")
+		q.debug("performing dnssec query. for level [%s]\n", currentLevel)
 		dsr, _, e := q.simpleResolve(currentLevel, target, dns.TypeDNSKEY, 0)
 		//q.debug("DNSSEC query:\n%s\n", dsr.String())
 		if e != nil {
@@ -798,8 +816,23 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16, sugges
 		krr := make([]dns.RR, 0)
 		r := make([]*dns.RRSIG, 0)
 
+		hasSOA := false
+		for _, aut := range dsr.Ns {
+			if _, ok := aut.(*dns.SOA); ok {
+				hasSOA = true
+				break
+			}
+		}
+
+		if len(dsr.Answer) == 0 && hasSOA {
+			currentLevel = strings.Join(strings.Split(currentLevel, ".")[1:], ".")
+			q.debug("Observed SOA on DNSKEY query. Reached bottom of the stack. means current level is in fact [%s]\n", currentLevel)
+			break /// without altering the chain of trust
+		}
+
 		for _, ans := range dsr.Answer {
 			if kr, ok := ans.(*dns.DNSKEY); ok {
+				q.debug("OBTAINED DNSKEY :: [%d][%s]\n", kr.KeyTag(), kr.String())
 				k = append(k, kr)
 				krr = append(krr, dns.RR(kr))
 			} else if rr, ok := ans.(*dns.RRSIG); ok {
@@ -831,12 +864,13 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16, sugges
 		for _, rr := range pubDS {
 
 			if pds, ok := rr.(*dns.DS); ok && findMatching(pds, k) {
-				// fmt.Printf("matched!!!\n")
+				q.debug("matched!!!\n")
 				numDSMatched++
 			}
 		}
 		/// if dnskeys are provided but can't authenticate them by parent ds-es, that smells funny and should bail, as per rfc suggestion
 		if numDSMatched == 0 {
+			q.debug("Cannot authnticate DNSKEY with parent DS.\n")
 			if forgivingDNSSECCheck {
 				q.setChainOfTrust(false)
 				break
@@ -857,10 +891,10 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16, sugges
 		}
 		/// next up is: validating current DNSKEY records via RRSIG
 		if e := q.validateSignatures(k, dsr); e != nil {
-			if forgivingDNSSECCheck {
-				q.setChainOfTrust(false)
-				break
-			}
+			// if forgivingDNSSECCheck {
+			// 	q.setChainOfTrust(false)
+			// 	break
+			// }
 			return nil, 0, newError(errorDNSSECBogus, severityFatal, "bogus dnssec response [%s]", e)
 		}
 
@@ -877,7 +911,10 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16, sugges
 		message.CheckingDisabled = true
 	}
 	/// send queries with DO flag, irrespective of the status of the chain of trust
+	// if q.chainOfTrustIntact {
 	message.SetEdns0(4096, *dnssecEnabled)
+	// }
+
 	message.SetQuestion(object, uint16(subject))
 	/// aka, if it's not used in dig mode, don't request recursion
 	if *targetNS == "" {
@@ -926,23 +963,30 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16, sugges
 	q.debug("Dns rountrip time is [%v]\n", rtt)
 
 	for q.chainOfTrustIntact && subject != dns.TypeDNSKEY {
-		currentLevel := inferCurrentLevel(object, subject)
+		// currentLevel := inferCurrentLevel(object, subject)
+		q.debug("Getting dnskeys for [%s] from cache.\n", currentLevel)
 		cachedKeys, _, e := q.retrieveCache(q.provider, currentLevel, dns.TypeDNSKEY)
 		if e != nil {
 			/// as argued in the dnskey validation phase, take no chances
 			/// either dnskeys missing from server altogether (very bad) or missing from cache (slightly bad)
-			if forgivingDNSSECCheck {
+			/// make a lookup for DNSKEY for the specific zone
+			// q.debug("LAUNCHING RESOLVE FOR MISSING DNSKEY\n\n\n\n")
+			// qkey := newQueryParam(currentLevel, dns.TypeDNSKEY, q.ilog, q.elog, q.provider, q.rt)
+			// qkey.setChainOfTrust(false) /// ironically
+			// cachedKeys, e = qkey.doResolve(resolveMethodRecursive)
+			// q.debug("FINISHING RESOLVE FOR MISSING DNSKEY\n\n\n\n")
+			if e != nil && forgivingDNSSECCheck {
 				q.setChainOfTrust(false)
 				break
 			}
-			return nil, 0, newError(errorCacheMiss, severityMajor, "cannot produce DNSKEY from cache [%s]", e.String())
+			// return nil, 0, newError(errorCacheMiss, severityMajor, "cannot produce DNSKEY from cache [%s]", e.String())
 		}
-
+		q.debug("Validating signatures.\n")
 		if e := q.validateSignatures(sliceRRtoDNSKEY(cachedKeys), reply); e != nil {
-			if forgivingDNSSECCheck {
-				q.setChainOfTrust(false)
-				break
-			}
+			// if forgivingDNSSECCheck {
+			// 	q.setChainOfTrust(false)
+			// 	break
+			// }
 			q.setChainOfTrust(false)
 			return nil, 0, newError(errorDNSSECBogus, severityFatal, fmt.Sprintf("bogus dnssec response for [%s] [%s]", object, e.Error()))
 		}
@@ -1020,22 +1064,39 @@ func contextIndependentValidateRR(rr dns.RR, domain string) bool {
 }
 
 /// l is a non-nil reference
-func populateFallbackServers(l *[]string, rr []dns.RR) {
+func populateFallbackServers(t string, l *[]string, rr []dns.RR) {
 	*l = make([]string, len(rr))
 	for _, r := range rr {
-		if a, ok := r.(*dns.A); ok {
+		if a, ok := r.(*dns.A); ok && !existingFallback(t, l, r) {
+
 			*l = append(*l, a.A.String())
 		}
 	}
 }
 
-func insertFallbackServer(l *[]string, rr dns.RR) {
+func insertFallbackServer(t string, l *[]string, rr dns.RR) {
 	if *l == nil {
 		*l = make([]string, 0)
 	}
-	if a, ok := rr.(*dns.A); ok {
+	if a, ok := rr.(*dns.A); ok && !existingFallback(t, l, rr) {
 		*l = append(*l, a.A.String())
 	}
+}
+
+func existingFallback(t string, l *[]string, rr dns.RR) bool {
+	a, ok := rr.(*dns.A)
+	if !ok {
+		return false
+	}
+	if t == a.A.String() {
+		return false
+	}
+	for _, item := range *l {
+		if item == a.A.String() {
+			return true
+		}
+	}
+	return false
 }
 
 /// this is the main loop for domain tokens -- returns one ip address or error
@@ -1084,7 +1145,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 			}
 			for _, fallbackRR := range rr2 {
 				if _, ok := fallbackRR.(*dns.A); ok {
-					insertFallbackServer(&fallbackServers, fallbackRR)
+					insertFallbackServer(targetServer, &fallbackServers, fallbackRR)
 				}
 			}
 		}
@@ -1115,7 +1176,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 						q.debug("Skipping step due to already cached value for [%s] -> [%s]\n", token, arr[0].(dns.RR).String())
 						targetServer = arr[0].(*dns.A).A.String()
 						if len(arr) > 1 {
-							populateFallbackServers(&fallbackServers, arr[1:])
+							populateFallbackServers(targetServer, &fallbackServers, arr[1:])
 						}
 						continue
 					}
@@ -1290,7 +1351,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 						if targetServer == "" {
 							targetServer = a.A.String()
 						} else {
-							insertFallbackServer(&fallbackServers, a)
+							insertFallbackServer(targetServer, &fallbackServers, a)
 						}
 					}
 					// special case handling when queried type is NS:
@@ -1322,7 +1383,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 					if targetServer == "" {
 						targetServer = a.A.String()
 					} else {
-						insertFallbackServer(&fallbackServers, a)
+						insertFallbackServer(targetServer, &fallbackServers, a)
 					}
 					//tw, _ = q.storeCache(q.provider, reply.Question[0].Name, []dns.RR{a})
 					q.timeWasted += tw
@@ -1406,6 +1467,9 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 							addressSlice := make([]*dns.A, 0)
 							/// means it has no CNAME at the end
 							if err != nil {
+								if err.errorCode == errorDNSSECBogus {
+									return nil, err
+								}
 								targetServer = oldTargetServer
 								break
 							} else {
@@ -1572,7 +1636,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 						q.debug("Success from cache.\n")
 						targetServer = a.A.String()
 						if len(arr) > 1 {
-							populateFallbackServers(&fallbackServers, arr[1:])
+							populateFallbackServers(targetServer, &fallbackServers, arr[1:])
 						}
 						break
 					}
@@ -1604,7 +1668,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 						}
 						targetServer = _targetServer[0].(*dns.A).A.String()
 						if len(_targetServer) > 1 {
-							populateFallbackServers(&fallbackServers, _targetServer[1:])
+							populateFallbackServers(targetServer, &fallbackServers, _targetServer[1:])
 						}
 						q.debug("Sub-Resolve end >>>[%s]\n\n", tHost)
 						q.timeWasted += newq.timeWasted
@@ -1645,6 +1709,11 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 		reply, tw, err = q.simpleResolve(q.vanilla, iteratedTargetServer, q.record, 0)
 		q.timeWasted += tw
 		if err != nil {
+			/// on dnssec validation error, no more chit-chat, just exit with servfail
+			if err.errorCode == errorDNSSECBogus {
+				q.debug("DNSSEC validation failed. Exiting immediately.\n")
+				return nil, err
+			}
 			if ind < len(finalTargetServers)-1 {
 				continue
 			}
@@ -1848,7 +1917,7 @@ func ServeDNS(cfg runtime.RecursorConfig, rt *runtime.Runtime, v4 bool, net stri
 		}
 	}
 
-	transferRootZone(lg, provider)
+	// transferRootZone(lg, provider)
 
 	pchan := make(chan interface{}, 1)
 	srv := &dns.Server{Addr: addr, Net: net, NotifyStartedFunc: notifyStarted, Handler: dns.HandlerFunc(dnsRecoverWrap(handleDNSMessage(lg, provider, net, rt, operator), pchan))}
