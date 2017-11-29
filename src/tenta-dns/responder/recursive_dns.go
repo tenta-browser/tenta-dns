@@ -1266,6 +1266,10 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 
 			// }
 
+			if reply == nil {
+				return []dns.RR{}, nil
+			}
+
 			recordHolder := make([]dns.RR, 0) //len(reply.Answer)+len(reply.Ns)+len(reply.Extra))
 			for _, record := range reply.Answer {
 				recordHolder = append(recordHolder, record)
