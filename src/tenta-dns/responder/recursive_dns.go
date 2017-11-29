@@ -952,6 +952,16 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16, sugges
 	q.debug("Question was [%s]\nNet stats: [%s][%s]\n", message.Question[0].String(), target+port, client.Net)
 	q.debug(">>> Query response <<<\n%s\n", reply.String())
 
+	/// some cases partial support for EDNS0 can yield a FORMERR to EDNS queries
+	/// wiping EDNS0 OPTS from ADDITIONAL section
+	if reply.Rcode == dns.RcodeFormatError {
+		q.debug("FORMERR caught -- retrying without edns0.\n")
+		message.Extra = []dns.RR{}
+		reply, rtt, err = client.Exchange(message, target+port)
+		q.debug("Question was [%s]\nNet stats: [%s][%s]\n", message.Question[0].String(), target+port, client.Net)
+		q.debug(">>> Query response <<<\n%s\n", reply.String())
+	}
+
 	// if message is larger than generic udp packet size 512, retry on tcp
 	if err == dns.ErrTruncated {
 		q.debug("Retrying on TCP. Stay tuned.\n")
