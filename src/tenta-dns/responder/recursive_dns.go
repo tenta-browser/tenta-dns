@@ -1207,7 +1207,11 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 			finalTargetServers = append(finalTargetServers, targetServer)
 			finalTargetServers = append(finalTargetServers, fallbackServers...)
 			var reply *dns.Msg
-			for ind, iteratedTargetServer := range finalTargetServers {
+			maxIter := 2
+			if len(finalTargetServers) < maxIter {
+				maxIter = len(finalTargetServers)
+			}
+			for ind, iteratedTargetServer := range finalTargetServers[:maxIter] {
 				reply, tw, err = q.simpleResolve(token, iteratedTargetServer, dns.TypeNS, 0)
 				q.timeWasted += tw
 				if err != nil {
@@ -1713,7 +1717,11 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 	wantsToErrorOut := false
 	var reply *dns.Msg
 	q.debug("TargetServer is [%s] and backupServers are [%v]\n", targetServer, fallbackServers)
-	for ind, iteratedTargetServer := range finalTargetServers {
+	maxIter := 2
+	if len(finalTargetServers) < maxIter {
+		maxIter = len(finalTargetServers)
+	}
+	for ind, iteratedTargetServer := range finalTargetServers[:maxIter] {
 		q.debug(">>> FINAL - Querying [%s] about [%s]<<<\n", iteratedTargetServer, q.vanilla)
 		reply, tw, err = q.simpleResolve(q.vanilla, iteratedTargetServer, q.record, 0)
 		q.timeWasted += tw
