@@ -33,6 +33,7 @@ import (
 	"net"
 	"os"
 	"reflect"
+	"runtime/debug"
 	"strings"
 	nlog "tenta-dns/log"
 	"tenta-dns/runtime"
