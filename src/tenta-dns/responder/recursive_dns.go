@@ -901,6 +901,7 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16, sugges
 			// 	q.setChainOfTrust(false)
 			// 	break
 			// }
+			q.setChainOfTrust(false)
 			return nil, 0, newError(errorDNSSECBogus, severityFatal, "bogus dnssec response [%s]", e)
 		}
 
@@ -1497,6 +1498,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 							/// means it has no CNAME at the end
 							if err != nil {
 								if err.errorCode == errorDNSSECBogus {
+									q.setChainOfTrust(false)
 									return nil, err
 								}
 								targetServer = oldTargetServer
