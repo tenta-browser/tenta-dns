@@ -1684,6 +1684,15 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 				}
 			}
 
+			/// we did not found the next step IP (in this specific case, the final query IP)
+			/// some cases when an authoritative server serves 2 levels (eg. asd.domain.com, and domain.com)
+			/// won't reply anything to a NS query for asd.domain.com
+			/// this catches that, and diverts execution to final query
+			if targetServer == "" && len(recordHolder) == 0 {
+				targetServer = oldTargetServer
+				break
+			}
+
 			/// means we have a serious problem on our hands, we have to bail, and perhaps add a negative cache entry
 			if targetServer == "" {
 				q.debug("Problem!!!\n")
