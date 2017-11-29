@@ -64,6 +64,14 @@ const (
 )
 
 const (
+	lastProblemNXDOMAIN = iota
+	lastProblemFORMERR
+	lastProblemREFUSED
+	lastProblemSERVFAIL
+	lastPRoblemTimeout
+)
+
+const (
 	severitySuccess  = iota /// yeah, success, probably won't be used at all
 	severityNuisance        /// error which does not block normal procedures, so handling is not necessary
 	severityMajor           /// difference being, handle error, or
@@ -130,20 +138,17 @@ type historyItem struct {
 }
 
 type queryParam struct {
-	vanilla      string
-	tokens       []string
-	record       uint16
-	continuation bool
-	rangeLimit   int /// index from where to continue
-	serverHint   string
-	CDFlagSet    bool
-	///this will be the answer part of the actual reply to the client
-	// the auth part will be based *strictly* of cache hits
-	result     []dns.RR
-	history    []historyItem
-	logBuffer  *bytes.Buffer
-	timeWasted time.Duration
-	/// this starts with true, and once something goes sideways, it gets set permanently to false (modifies AD flag in client response, if CD not provided)
+	vanilla               string
+	tokens                []string
+	record, errors        uint16
+	continuation          bool
+	rangeLimit            int /// index from where to continue
+	serverHint            string
+	CDFlagSet             bool
+	result                []dns.RR
+	history               []historyItem
+	logBuffer             *bytes.Buffer
+	timeWasted            time.Duration
 	chainOfTrustIntact    bool
 	spawnedFrom           *queryParam
 	ilog                  *logrus.Entry        /// this is an instant log, it shows the message instantly
@@ -168,7 +173,7 @@ type resultData struct {
 }
 
 func (q *queryParam) newContinationParam(rangeLimit int, serverHint string) *queryParam {
-	return &queryParam{q.vanilla, q.tokens, q.record, true, rangeLimit, serverHint, q.CDFlagSet, nil, q.history, q.logBuffer, 0, q.chainOfTrustIntact, q, q.ilog, q.elog, q.provider, q.authority, q.additional, q.rt}
+	return &queryParam{q.vanilla, q.tokens, q.record, 0, true, rangeLimit, serverHint, q.CDFlagSet, nil, q.history, q.logBuffer, 0, q.chainOfTrustIntact, q, q.ilog, q.elog, q.provider, q.authority, q.additional, q.rt}
 }
 
 /// fork-join scheme for lookup continuations
@@ -274,7 +279,7 @@ func newQueryParam(vanilla string, record uint16, ilog *logrus.Entry, elog *nlog
 	for i := len(temp) - 1; i >= 0; i-- {
 		tokens[len(temp)-i-1] = strings.Join(temp[i:len(temp)], ".") + "."
 	}
-	return &queryParam{dns.Fqdn(vanilla), tokens, record, false, 0, "", false, nil, make([]historyItem, 0), new(bytes.Buffer), 0, true, nil, ilog, elog, provider, new([]dns.RR), new([]dns.RR), rt}
+	return &queryParam{dns.Fqdn(vanilla), tokens, record, 0, false, 0, "", false, nil, make([]historyItem, 0), new(bytes.Buffer), 0, true, nil, ilog, elog, provider, new([]dns.RR), new([]dns.RR), rt}
 }
 
 /// define it here for short term clarity
@@ -955,7 +960,20 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16, sugges
 
 	if err != nil {
 		return nil, 0, newError(errorCannotResolve, severityFatal, "simpleResolve failed. [%s]", err)
-	} else if reply.Rcode == dns.RcodeServerFailure {
+	}
+
+	switch reply.Rcode {
+	case dns.RcodeServerFailure:
+		q.errors |= lastProblemSERVFAIL
+	case dns.RcodeFormatError:
+		q.errors |= lastProblemFORMERR
+	case dns.RcodeRefused:
+		q.errors |= lastProblemREFUSED
+	case dns.RcodeNameError:
+		q.errors |= lastProblemNXDOMAIN
+	}
+
+	if reply.Rcode == dns.RcodeServerFailure {
 		return nil, 0, newError(errorCannotResolve, severityMajor, "simpleResolve got SERVFAIL.")
 	} else if reply.Rcode == dns.RcodeRefused {
 		return nil, 0, newError(errorCannotResolve, severityMajor, "simpleResolve got REFUSED.")
@@ -1212,6 +1230,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 			if len(finalTargetServers) < maxIter {
 				maxIter = len(finalTargetServers)
 			}
+			q.errors = 0
 			for ind, iteratedTargetServer := range finalTargetServers[:maxIter] {
 				reply, tw, err = q.simpleResolve(token, iteratedTargetServer, dns.TypeNS, 0)
 				q.timeWasted += tw
@@ -1474,6 +1493,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 							q.timeWasted += soaCont.timeWasted
 							cnameSlice := make([]*dns.CNAME, 0)
 							addressSlice := make([]*dns.A, 0)
+							q.debug("Luring out ended.\n\n")
 							/// means it has no CNAME at the end
 							if err != nil {
 								if err.errorCode == errorDNSSECBogus {
@@ -1513,6 +1533,10 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 									//q.result = append(q.result, addressSlice...)
 									return q.result, nil
 								}
+							}
+							/// if we have only SOA in record holder and target server is still empty (and we already did an A on the same server), return that result set
+							if len(recordHolder) == 1 && targetServer == "" {
+								return soaCNAME, nil
 							}
 
 						}
@@ -1831,6 +1855,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 }
 
 func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime.Runtime, operatorID string) dnsHandler {
+
 	l := loggy
 	return func(w dns.ResponseWriter, r *dns.Msg) {
 		startTime := time.Now()
@@ -1880,6 +1905,7 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 		answer, err := qp.doResolve(resolveMethodToUse)
 		resolvTime := time.Now().Sub(startTime)
 		response := new(dns.Msg)
+
 		if err != nil {
 			elogger.Queuef("RESOLVE RETURNED ERROR [%s]", err.String())
 			if err.errorCode != errorUnresolvable {
