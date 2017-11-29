@@ -22,7 +22,12 @@
 
 package responder
 
-import "github.com/miekg/dns"
+import (
+	"fmt"
+	"runtime/debug"
+
+	"github.com/miekg/dns"
+)
 
 const (
 	StatsQueryTotal = "resolver:queries:total"
@@ -35,13 +40,24 @@ const (
 	StatsQueryUniqueIps  = "resolver:queries:remote_ips"
 )
 
+type StackAddedPanic struct {
+	trc []byte
+	rcv interface{}
+}
+
+func (s *StackAddedPanic) String() string {
+	return fmt.Sprintf("[%v]\n%s", s.rcv, s.trc)
+}
+
 type dnsHandler func(w dns.ResponseWriter, r *dns.Msg)
 
 func dnsRecoverWrap(hndl dnsHandler, notify chan interface{}) dnsHandler {
 	return func(w dns.ResponseWriter, r *dns.Msg) {
 		defer func() {
 			if rcv := recover(); rcv != nil {
-				notify <- rcv
+				snd := &StackAddedPanic{debug.Stack(), rcv}
+				fmt.Printf("This is how we write this [%s]\n", snd)
+				notify <- snd
 			}
 		}()
 		hndl(w, r)

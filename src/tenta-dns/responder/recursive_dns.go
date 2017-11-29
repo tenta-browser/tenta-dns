@@ -1910,12 +1910,10 @@ func ServeDNS(cfg runtime.RecursorConfig, rt *runtime.Runtime, v4 bool, net stri
 	// TODO: Get rid of these old variables variables
 	*dnssecEnabled = dnssecMode
 	*debugLevel = true
-
 	provider := "tenta"
 	if opennicMode == true {
 		provider = "opennic"
 	}
-
 	ip, port := hostInfo(v4, net, d)
 	addr := fmt.Sprintf("%s:%d", ip, port)
 	lg := nlog.GetLogger("dnsrecursor").WithField("host_name", d.HostName).WithField("address", ip).WithField("port", port).WithField("proto", net)
@@ -1928,22 +1926,28 @@ func ServeDNS(cfg runtime.RecursorConfig, rt *runtime.Runtime, v4 bool, net stri
 	}
 	lg.Debugf("Preparing %s dns recursor on %s", net, addr)
 
+	pchan := make(chan interface{}, 1)
+	srv := &dns.Server{Addr: addr, Net: net, NotifyStartedFunc: notifyStarted, Handler: dns.HandlerFunc(dnsRecoverWrap(handleDNSMessage(lg, provider, net, rt, operator), pchan))}
+	defer rt.OnFinishedOrPanic(func() {
+		srv.Shutdown()
+		lg.Infof("Stopped %s dns resolver on %s", net, addr)
+		rt.SlackWH.SendMessage("shutting down.", operator)
+	}, pchan)
+	defer func() {
+		if rcv := recover(); rcv != nil {
+			snd := &StackAddedPanic{debug.Stack(), rcv}
+			fmt.Printf("Panic in ServeDNS [%s]\n", snd)
+			pchan <- snd
+		}
+	}()
+
 	if dnssecMode {
 		if e := getTrustedRootAnchors(lg, provider, rt); e != nil {
 			panic(fmt.Sprintf("Cannot obtain root trust anchors. [%v]\n", e))
 		}
 	}
 
-	// transferRootZone(lg, provider)
-
-	pchan := make(chan interface{}, 1)
-	srv := &dns.Server{Addr: addr, Net: net, NotifyStartedFunc: notifyStarted, Handler: dns.HandlerFunc(dnsRecoverWrap(handleDNSMessage(lg, provider, net, rt, operator), pchan))}
-
-	defer rt.OnFinishedOrPanic(func() {
-		srv.Shutdown()
-		lg.Infof("Stopped %s dns resolver on %s", net, addr)
-		rt.SlackWH.SendMessage("shutting down.", operator)
-	}, pchan)
+	transferRootZone(lg, provider)
 
 	if net == "tls" {
 		go func() {

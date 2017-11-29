@@ -27,7 +27,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -262,7 +261,7 @@ func (dir *Director) doOrchestrate(systemd bool) {
 			break
 		case f := <-failures:
 			dir.lg.Warnf("Got a failure in %s: %s", f.p.id, f.r)
-			dir.r.SlackWH.SendMessage(fmt.Sprintf("panic caught -- ```[%s]\n---\n%s```", f.r, debug.Stack()), f.p.id)
+			dir.r.SlackWH.SendMessage(fmt.Sprintf("panic caught: ```%s```", f.r), f.p.id)
 			fails := atomic.LoadUint32(&f.p.fails)
 			if fails >= RECENT_FAILURE_LIMIT {
 				dir.lg.Errorf("Perma killing %s", f.p.id)
