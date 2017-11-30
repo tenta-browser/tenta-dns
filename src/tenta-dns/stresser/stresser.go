@@ -148,6 +148,7 @@ func (w *worker) doWork(id uint) {
 			m.Id = dns.Id()
 			m.RecursionDesired = true
 			m.CheckingDisabled = false
+			m.SetEdns0(4096, false)
 			m.Question = make([]dns.Question, 1)
 			m.Question[0] = dns.Question{Name: dns.Fqdn(name), Qtype: dns.TypeA, Qclass: dns.ClassINET}
 			c := new(dns.Client)

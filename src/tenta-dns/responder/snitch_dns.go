@@ -222,9 +222,8 @@ func handleSnitch(cfg runtime.NSnitchConfig, rt *runtime.Runtime, d *runtime.Ser
 						sn := o.(*dns.EDNS0_SUBNET)
 						subnetquery = rt.Geo.Query(sn.Address.String())
 						cs := &common.ClientSubnet{
-							IP:        sn.Address.String(),
-							Netmask:   int(sn.SourceNetmask),
-							DraftMode: sn.DraftOption,
+							IP:      sn.Address.String(),
+							Netmask: int(sn.SourceNetmask),
 						}
 						if sn.Family == 1 {
 							cs.IPFamily = "v4"

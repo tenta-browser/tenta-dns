@@ -24,9 +24,6 @@ package director
 
 import (
 	"fmt"
-	"github.com/coreos/go-systemd/daemon"
-	"github.com/sirupsen/logrus"
-	"github.com/tevino/abool"
 	"net"
 	"os"
 	"path/filepath"
@@ -40,6 +37,10 @@ import (
 	"tenta-dns/responder"
 	"tenta-dns/runtime"
 	"time"
+
+	"github.com/coreos/go-systemd/daemon"
+	"github.com/sirupsen/logrus"
+	"github.com/tevino/abool"
 )
 
 const RECENT_FAILURE_LIMIT = 3
@@ -260,6 +261,7 @@ func (dir *Director) doOrchestrate(systemd bool) {
 			break
 		case f := <-failures:
 			dir.lg.Warnf("Got a failure in %s: %s", f.p.id, f.r)
+			dir.r.SlackWH.SendMessage(fmt.Sprintf("panic caught: ```%s```", f.r), f.p.id)
 			fails := atomic.LoadUint32(&f.p.fails)
 			if fails >= RECENT_FAILURE_LIMIT {
 				dir.lg.Errorf("Perma killing %s", f.p.id)

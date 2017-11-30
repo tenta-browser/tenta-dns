@@ -33,6 +33,7 @@ import (
 	"net"
 	"os"
 	"reflect"
+	"runtime/debug"
 	"strings"
 	nlog "tenta-dns/log"
 	"tenta-dns/runtime"
@@ -60,6 +61,14 @@ const (
 	cacheHitDomain = iota
 	cacheHitTLD
 	cacheMiss
+)
+
+const (
+	lastProblemNXDOMAIN = iota
+	lastProblemFORMERR
+	lastProblemREFUSED
+	lastProblemSERVFAIL
+	lastPRoblemTimeout
 )
 
 const (
@@ -129,27 +138,24 @@ type historyItem struct {
 }
 
 type queryParam struct {
-	vanilla      string
-	tokens       []string
-	record       uint16
-	continuation bool
-	rangeLimit   int /// index from where to continue
-	serverHint   string
-	CDFlagSet    bool
-	///this will be the answer part of the actual reply to the client
-	// the auth part will be based *strictly* of cache hits
-	result     []dns.RR
-	history    []historyItem
-	logBuffer  *bytes.Buffer
-	timeWasted time.Duration
-	/// this starts with true, and once something goes sideways, it gets set permanently to false (modifies AD flag in client response, if CD not provided)
+	vanilla               string
+	tokens                []string
+	record, errors        uint16
+	continuation          bool
+	rangeLimit            int /// index from where to continue
+	serverHint            string
+	CDFlagSet             bool
+	result                []dns.RR
+	history               []historyItem
+	logBuffer             *bytes.Buffer
+	timeWasted            time.Duration
 	chainOfTrustIntact    bool
 	spawnedFrom           *queryParam
 	ilog                  *logrus.Entry        /// this is an instant log, it shows the message instantly
 	elog                  *nlog.EventualLogger /// this one will be shown if certain conditions are met
 	provider              string
 	authority, additional *[]dns.RR
-	ips                   *runtime.Pool
+	rt                    *runtime.Runtime
 }
 
 /// 2 structs to help parse xml response from iana -- root zone trust anchor
@@ -167,7 +173,7 @@ type resultData struct {
 }
 
 func (q *queryParam) newContinationParam(rangeLimit int, serverHint string) *queryParam {
-	return &queryParam{q.vanilla, q.tokens, q.record, true, rangeLimit, serverHint, q.CDFlagSet, nil, q.history, q.logBuffer, 0, q.chainOfTrustIntact, q, q.ilog, q.elog, q.provider, q.authority, q.additional, q.ips}
+	return &queryParam{q.vanilla, q.tokens, q.record, 0, true, rangeLimit, serverHint, q.CDFlagSet, nil, q.history, q.logBuffer, 0, q.chainOfTrustIntact, q, q.ilog, q.elog, q.provider, q.authority, q.additional, q.rt}
 }
 
 /// fork-join scheme for lookup continuations
@@ -188,7 +194,7 @@ func (q *queryParam) debug(format string, args ...interface{}) {
 }
 
 func (q *queryParam) setChainOfTrust(b bool) {
-	// q.debug("\n\n\nSetting [%v] for chain of trust!!!\n\n\n\n", b)
+	q.debug("Setting [%v] for chain of trust!!!\n", b)
 	q.chainOfTrustIntact = b
 }
 
@@ -264,7 +270,7 @@ func (e *dnsError) String() string {
 
 /// assumes domain is valid (eg. tenta.io, asd.qwe.zxc.lol)
 /// dnssec is on by default
-func newQueryParam(vanilla string, record uint16, ilog *logrus.Entry, elog *nlog.EventualLogger, provider string, ips *runtime.Pool) *queryParam {
+func newQueryParam(vanilla string, record uint16, ilog *logrus.Entry, elog *nlog.EventualLogger, provider string, rt *runtime.Runtime) *queryParam {
 	if dns.IsFqdn(vanilla) {
 		vanilla = vanilla[:len(vanilla)-1]
 	}
@@ -273,7 +279,7 @@ func newQueryParam(vanilla string, record uint16, ilog *logrus.Entry, elog *nlog
 	for i := len(temp) - 1; i >= 0; i-- {
 		tokens[len(temp)-i-1] = strings.Join(temp[i:len(temp)], ".") + "."
 	}
-	return &queryParam{dns.Fqdn(vanilla), tokens, record, false, 0, "", false, nil, make([]historyItem, 0), new(bytes.Buffer), 0, true, nil, ilog, elog, provider, new([]dns.RR), new([]dns.RR), ips}
+	return &queryParam{dns.Fqdn(vanilla), tokens, record, 0, false, 0, "", false, nil, make([]historyItem, 0), new(bytes.Buffer), 0, true, nil, ilog, elog, provider, new([]dns.RR), new([]dns.RR), rt}
 }
 
 /// define it here for short term clarity
@@ -299,17 +305,7 @@ func storeCache(provider, domain string, _recordLiteral interface{}) (time.Durat
 		}
 		ulteriorRR := make([]dns.RR, 0)
 		ulteriorDomain := make([]string, 0)
-		//
 		t := cache2go.Cache(provider + "/" + domain)
-		// err := db.Update(func(tx *bolt.Tx) error {
-		// pb, _ := tx.CreateBucketIfNotExists([]byte(provider))
-		// b, err := pb.CreateBucketIfNotExists([]byte(domain))
-		// if err != nil {
-		// 	return fmt.Errorf("cannot open bucket [%s] [%s]", domain, err)
-		// }
-		/// first run: handle A
-		/// next round: NS, CNAME
-		/// ... handle ttls
 		lockwait := time.Now()
 		retDuration += time.Now().Sub(lockwait)
 		for _, rr := range recordLiteral {
@@ -321,21 +317,16 @@ func storeCache(provider, domain string, _recordLiteral interface{}) (time.Durat
 					ulteriorDomain = append(ulteriorDomain, ptr.Header().Name)
 				}
 			}
-			// timeBytes, _ := time.Now().Add(time.Duration(rr.Header().Ttl) * time.Second).MarshalText()
-			// logger.debug("Trying to store [%s/%s] [%v] for [%d]\n", provider, domain, rr, rr.Header().Ttl)
-			strToAdd := strings.ToLower(rr.String())
+			var strToAdd string
+			switch rr.(type) {
+			case *dns.RRSIG, *dns.DNSKEY, *dns.TSIG, *dns.DS:
+				strToAdd = rr.String()
+			default:
+				strToAdd = strings.ToLower(rr.String())
+			}
+
 			t.Add(strToAdd, time.Duration(rr.Header().Ttl+1)*time.Second, nil)
 		}
-		/// shortcut ttl out so no RR scanning steps are needed to determine cache freshness
-		/// save the RR in string form, instead of wire form, it's just faster
-		//b.Put([]byte(rr.String()), timeBytes)
-		// }
-		// }
-		// return nil
-		// })
-		// if err != nil {
-		// 	return retDuration, newError(errorCacheWriteError, severityMajor, "cannot write cache [%s/%s] [%s]", provider, domain, err)
-		// }
 
 		for i, ptr := range ulteriorRR {
 			storeCache(provider, ulteriorDomain[i], []dns.RR{ptr})
@@ -346,25 +337,12 @@ func storeCache(provider, domain string, _recordLiteral interface{}) (time.Durat
 			// too chatty?
 			return retDuration, newError(errorInvalidArgument, severityMajor, "invalid argument [%s/%s] expected []string got %s ", provider, domain, reflect.TypeOf(_recordLiteral).String())
 		}
-		//err := db.Update(func(tx *bolt.Tx) error {
 		com := cache2go.Cache(provider + "/" + domain)
-		// pb, _ := tx.CreateBucketIfNotExists([]byte(provider))
-		// b, err := pb.CreateBucketIfNotExists([]byte(domain))
-		// if err != nil {
-		// 	return fmt.Errorf("cannot open bucket [%s] [%s]", domain, err)
-		// }
 		lockwait := time.Now()
 		retDuration += time.Now().Sub(lockwait)
 		for _, item := range recordLiteral {
-			// q.debug("saving item: [%s-%s-%s] -> [%s]\n", provider, domain, item.key, item.value)
-			//err := b.Put([]byte(item.key), []byte(item.value))
 			com.Add(item.key, 0, item.value)
 		}
-		// 	return nil
-		// })
-		// if err != nil {
-		// 	return retDuration, newError(errorCacheWriteError, severityMajor, "cannot write cache [%s/%s] [%s]", provider, domain, err)
-		// }
 	}
 	return retDuration, nil
 }
@@ -402,7 +380,13 @@ func (q *queryParam) storeCache(provider, domain string, _recordLiteral interfac
 
 			// timeBytes, _ := time.Now().Add(time.Duration(rr.Header().Ttl) * time.Second).MarshalText()
 			q.debug("Trying to store [%s/%s] [%v] for [%d]\n", provider, domain, rr, rr.Header().Ttl)
-			strToAdd := strings.ToLower(rr.String())
+			var strToAdd string
+			switch rr.(type) {
+			case *dns.RRSIG, *dns.DNSKEY, *dns.TSIG, *dns.DS:
+				strToAdd = rr.String()
+			default:
+				strToAdd = strings.ToLower(rr.String())
+			}
 			t.Add(strToAdd, time.Duration(rr.Header().Ttl+1)*time.Second, q.chainOfTrustIntact)
 		}
 		for i, ptr := range ulteriorRR {
@@ -429,7 +413,6 @@ func (q *queryParam) storeCache(provider, domain string, _recordLiteral interfac
 func (q *queryParam) retrieveCache(provider, domain string, recordType uint16) (retrr []dns.RR, retDuration time.Duration, e *dnsError) {
 	retrr = make([]dns.RR, 0)
 	cacheTab := cache2go.Cache(provider + "/" + domain)
-
 	if provider == dnsProviderTenta || provider == dnsProviderOpennic {
 		allTrue := true
 		cacheTab.Foreach(func(key interface{}, data *cache2go.CacheItem) {
@@ -478,7 +461,6 @@ func (q *queryParam) retrieveCache(provider, domain string, recordType uint16) (
 		return nil, retDuration, newError(errorCacheReadError, severityMajor, "cache entry not found [%s -- %s]", provider, domain)
 	}
 	return retrr, retDuration, nil
-
 }
 
 /// ulteriorly, will return a whole RR line (or more, in fact), if matches the type
@@ -487,20 +469,6 @@ func retrieveCache(provider, domain string, recordType uint16) (retrr []dns.RR, 
 	cacheTab := cache2go.Cache(provider + "/" + domain)
 
 	if provider == dnsProviderTenta || provider == dnsProviderOpennic {
-		// records := make([]string, 0)
-
-		//lockwait := time.Now()
-		// err := db.View(func(tx *bolt.Tx) error {
-		//retDuration += time.Now().Sub(lockwait)
-		// pb := tx.Bucket([]byte(provider))
-		// if pb == nil {
-		// 	return newError(errorCacheMiss, severitySuccess, "cache miss [%s]", domain)
-		// }
-		// b := pb.Bucket([]byte(domain))
-		// if b == nil {
-		// 	return newError(errorCacheMiss, severitySuccess, "cache miss [%s]", domain)
-		// }
-		//c := b.Cursor()
 		cacheTab.Foreach(func(key interface{}, data *cache2go.CacheItem) {
 			rrString, ok := key.(string)
 			if !ok {
@@ -529,41 +497,6 @@ func retrieveCache(provider, domain string, recordType uint16) (retrr []dns.RR, 
 			}
 
 		})
-		// for k, v := c.First(); k != nil; k, v = c.Next() {
-		// 	// rr, err := dns.NewRR(string(k))
-		// 	records = append(records, string(k))
-		// }
-
-		// 	return nil
-		// })
-
-		// if err != nil || len(records) == 0 {
-		// 	return nil, retDuration, newError(errorCacheReadError, severityMajor, "cannot read cache [%s/%s]", provider, domain)
-		// }
-
-		/// if it wasn't found let's try other means to achieve success
-		// and retrr is obviously nil...
-		// for _, rrString := range records {
-		// 	//rr, _, _ := dns.UnpackRR([]byte(rrString), 0)
-		// 	rr, err := dns.NewRR(string(rrString))
-		// 	if err != nil {
-		// 		continue
-		// 	}
-		// 	/// if record is of desired type, let's put it in the result slice
-		// 	if rr.Header().Rrtype == recordType {
-		// 		retrr = append(retrr, rr)
-		// 	}
-		// 	/// follow through CNAME redirection, unless of course CNAME is whate we're looking for
-		// 	if rr.Header().Rrtype == dns.TypeCNAME && recordType != dns.TypeCNAME {
-		// 		logger.debug("Doing the cname dereference. [%s]->[%s]\n", domain, rr.(*dns.CNAME).Target)
-		// 		derefRR, tdur, er := retrieveCache(provider, rr.(*dns.CNAME).Target, recordType)
-		// 		retDuration += tdur
-		// 		if er == nil {
-		// 			/// adding CNAME dereference to the final result (for context for the final host/record tuple)
-		// 			retrr = append(retrr, derefRR...)
-		// 		}
-		// 	}
-		// }
 	}
 	if len(retrr) == 0 {
 		return nil, retDuration, newError(errorCacheReadError, severityMajor, "cache entry not found [%s -- %s]", provider, domain)
@@ -641,7 +574,7 @@ func hasTLSCapability(provider, domain, key string) (time.Duration, int) {
 }
 
 /// TODO
-func setupDNSClient(client *dns.Client, port *string, target string, tlsCapability int, needsTCP bool, provider string, ips *runtime.Pool) (tw time.Duration) {
+func setupDNSClient(client *dns.Client, port *string, target string, tlsCapability int, needsTCP bool, provider string, rt *runtime.Runtime) (tw time.Duration) {
 	if tlsCapability == serverCapabilityTrue {
 		hostname := target
 		// hostnameAvailable := false
@@ -660,7 +593,7 @@ func setupDNSClient(client *dns.Client, port *string, target string, tlsCapabili
 		}
 		client.Net = "tcp-tls"
 		*port = ":853"
-
+		hostname = strings.TrimRight(hostname, ".")
 		client.TLSConfig = &tls.Config{
 			MinVersion: tls.VersionTLS10,
 			ServerName: hostname,
@@ -681,6 +614,7 @@ func setupDNSClient(client *dns.Client, port *string, target string, tlsCapabili
 				tls.TLS_RSA_WITH_3DES_EDE_CBC_SHA,
 			},
 		}
+		needsTCP = true
 
 	} else if needsTCP {
 		client.Net = "tcp"
@@ -691,25 +625,25 @@ func setupDNSClient(client *dns.Client, port *string, target string, tlsCapabili
 	}
 
 	if needsTCP {
-		client.Dialer = ips.RandomizeTCPDialer()
+		client.Dialer = rt.IPPool.RandomizeTCPDialer()
 	} else {
-		client.Dialer = ips.RandomizeUDPDialer()
+		client.Dialer = rt.IPPool.RandomizeUDPDialer()
 	}
 
 	return
 }
 
 /// a simple tls based discovery query
-func doTLSDiscovery(target, provider string, ips *runtime.Pool) (tw time.Duration) {
+func doTLSDiscovery(target, provider string, rt *runtime.Runtime) (tw time.Duration) {
 	m := new(dns.Msg)
 	m.SetQuestion(".", dns.TypeNULL)
 	c := new(dns.Client)
 	port := ""
-	setupDNSClient(c, &port, target, serverCapabilityTrue, false, provider, ips)
+	setupDNSClient(c, &port, target, serverCapabilityTrue, false, provider, rt)
 	//c.Timeout = 3 * time.Second
 	_, _, err := c.Exchange(m, target+port)
 	if err != nil {
-		// logger.debug("\n\nDISCOVERY :: ERROR [%s]\n\n", err)
+		// logger.debug("DISCOVERY :: ERROR [%s]: [%s]", target+port, err)
 		t, err := storeCache("common", target, []cacheItem{cacheItem{key: "hasTLSSupport", value: "false"}})
 		tw += t
 		if err != nil {
@@ -718,7 +652,7 @@ func doTLSDiscovery(target, provider string, ips *runtime.Pool) (tw time.Duratio
 		return
 	}
 	/// TODO -- add non-anonymized stats for dns-over-tls support
-	// logger.debug("\n\nDISCOVERY SUCCESS :[%v]: [%s]\n\n", rtt, reply.String())
+	// logger.debug("DISCOVERY SUCCESS :[%s]: [%s]", target+port, reply.String())
 	/// at this point the query is a success -> save tls cap to cache
 	t, derr := storeCache("common", target, []cacheItem{cacheItem{key: "hasTLSSupport", value: "true"}})
 	tw += t
@@ -765,6 +699,10 @@ func (q *queryParam) validateSignatures(keyR []*dns.DNSKEY, fullMsg *dns.Msg) er
 		q.setChainOfTrust(false)
 		/// will spends some more thoughts as this is an error or not, but right now it's considered a non-error
 		return nil
+	}
+
+	for _, dnskey := range keyR {
+		q.debug("Validating with key [%d][%s]\n", dnskey.KeyTag(), dnskey.String())
 	}
 
 	for _, rr := range rrMap[dns.TypeRRSIG] {
@@ -861,10 +799,11 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16, sugges
 	/// if the chain of trust is broken, don't bother tho'
 	/// we do this with a breakable if
 	/// and we calculate current level in dns hierarchy
+	currentLevel := ""
 	for q.chainOfTrustIntact && subject != dns.TypeDNSKEY {
-		currentLevel := inferCurrentLevel(object, subject)
+		currentLevel = inferCurrentLevel(object, subject)
 		/// root zone is level 1
-		q.debug("performing dnssec query.\n")
+		q.debug("performing dnssec query. for level [%s]\n", currentLevel)
 		dsr, _, e := q.simpleResolve(currentLevel, target, dns.TypeDNSKEY, 0)
 		//q.debug("DNSSEC query:\n%s\n", dsr.String())
 		if e != nil {
@@ -883,8 +822,23 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16, sugges
 		krr := make([]dns.RR, 0)
 		r := make([]*dns.RRSIG, 0)
 
+		hasSOA := false
+		for _, aut := range dsr.Ns {
+			if _, ok := aut.(*dns.SOA); ok {
+				hasSOA = true
+				break
+			}
+		}
+
+		if len(dsr.Answer) == 0 && hasSOA {
+			currentLevel = strings.Join(strings.Split(currentLevel, ".")[1:], ".")
+			q.debug("Observed SOA on DNSKEY query. Reached bottom of the stack. means current level is in fact [%s]\n", currentLevel)
+			break /// without altering the chain of trust
+		}
+
 		for _, ans := range dsr.Answer {
 			if kr, ok := ans.(*dns.DNSKEY); ok {
+				q.debug("OBTAINED DNSKEY :: [%d][%s]\n", kr.KeyTag(), kr.String())
 				k = append(k, kr)
 				krr = append(krr, dns.RR(kr))
 			} else if rr, ok := ans.(*dns.RRSIG); ok {
@@ -916,12 +870,13 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16, sugges
 		for _, rr := range pubDS {
 
 			if pds, ok := rr.(*dns.DS); ok && findMatching(pds, k) {
-				// fmt.Printf("matched!!!\n")
+				q.debug("matched!!!\n")
 				numDSMatched++
 			}
 		}
 		/// if dnskeys are provided but can't authenticate them by parent ds-es, that smells funny and should bail, as per rfc suggestion
 		if numDSMatched == 0 {
+			q.debug("Cannot authnticate DNSKEY with parent DS.\n")
 			if forgivingDNSSECCheck {
 				q.setChainOfTrust(false)
 				break
@@ -942,10 +897,11 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16, sugges
 		}
 		/// next up is: validating current DNSKEY records via RRSIG
 		if e := q.validateSignatures(k, dsr); e != nil {
-			if forgivingDNSSECCheck {
-				q.setChainOfTrust(false)
-				break
-			}
+			// if forgivingDNSSECCheck {
+			// 	q.setChainOfTrust(false)
+			// 	break
+			// }
+			q.setChainOfTrust(false)
 			return nil, 0, newError(errorDNSSECBogus, severityFatal, "bogus dnssec response [%s]", e)
 		}
 
@@ -962,7 +918,10 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16, sugges
 		message.CheckingDisabled = true
 	}
 	/// send queries with DO flag, irrespective of the status of the chain of trust
+	// if q.chainOfTrustIntact {
 	message.SetEdns0(4096, *dnssecEnabled)
+	// }
+
 	message.SetQuestion(object, uint16(subject))
 	/// aka, if it's not used in dig mode, don't request recursion
 	if *targetNS == "" {
@@ -974,12 +933,12 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16, sugges
 	client := new(dns.Client)
 
 	port := ""
-	setupDNSClient(client, &port, target, serverCapabilityFalse, preferredProtocol == "tcp", q.provider, q.ips)
+	setupDNSClient(client, &port, target, targetCap, preferredProtocol == "tcp", q.provider, q.rt)
 
 	if targetCap == serverCapabilityUnknown {
 		go func() {
 			/// duration does not matter here so much
-			doTLSDiscovery(target, q.provider, q.ips)
+			doTLSDiscovery(target, q.provider, q.rt)
 		}()
 	}
 
@@ -990,44 +949,74 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16, sugges
 		q.debug("Querying with increaset timeout [%d] seconds", 5+suggestedTimeout)
 	}
 	reply, rtt, err := client.Exchange(message, target+port)
-	q.debug("Question was [%s]\n", message.Question[0].String())
+	q.debug("Question was [%s]\nNet stats: [%s][%s]\n", message.Question[0].String(), target+port, client.Net)
 	q.debug(">>> Query response <<<\n%s\n", reply.String())
+
+	/// some cases partial support for EDNS0 can yield a FORMERR to EDNS queries
+	/// wiping EDNS0 OPTS from ADDITIONAL section
+	if reply != nil && reply.Rcode == dns.RcodeFormatError {
+		q.debug("FORMERR caught -- retrying without edns0.\n")
+		message.Extra = []dns.RR{}
+		reply, rtt, err = client.Exchange(message, target+port)
+		q.debug("Question was [%s]\nNet stats: [%s][%s]\n", message.Question[0].String(), target+port, client.Net)
+		q.debug(">>> Query response <<<\n%s\n", reply.String())
+	}
 
 	// if message is larger than generic udp packet size 512, retry on tcp
 	if err == dns.ErrTruncated {
 		q.debug("Retrying on TCP. Stay tuned.\n")
-		setupDNSClient(client, &port, target, serverCapabilityFalse, true, q.provider, q.ips)
+		setupDNSClient(client, &port, target, serverCapabilityFalse, true, q.provider, q.rt)
 		reply, rtt, err = client.Exchange(message, target+port)
 	}
 
 	if err != nil {
 		return nil, 0, newError(errorCannotResolve, severityFatal, "simpleResolve failed. [%s]", err)
-	} else if reply.Rcode == dns.RcodeServerFailure {
-		return nil, 0, newError(errorCannotResolve, severityNuisance, "simpleResolve got SERVFAIL.")
+	}
+
+	switch reply.Rcode {
+	case dns.RcodeServerFailure:
+		q.errors |= lastProblemSERVFAIL
+	case dns.RcodeFormatError:
+		q.errors |= lastProblemFORMERR
+	case dns.RcodeRefused:
+		q.errors |= lastProblemREFUSED
+	case dns.RcodeNameError:
+		q.errors |= lastProblemNXDOMAIN
+	}
+
+	if reply.Rcode == dns.RcodeServerFailure {
+		return nil, 0, newError(errorCannotResolve, severityMajor, "simpleResolve got SERVFAIL.")
 	} else if reply.Rcode == dns.RcodeRefused {
-		return nil, 0, newError(errorCannotResolve, severityNuisance, "simpleResolve got REFUSED.")
+		return nil, 0, newError(errorCannotResolve, severityMajor, "simpleResolve got REFUSED.")
 	}
 
 	q.debug("Dns rountrip time is [%v]\n", rtt)
 
 	for q.chainOfTrustIntact && subject != dns.TypeDNSKEY {
-		currentLevel := inferCurrentLevel(object, subject)
+		// currentLevel := inferCurrentLevel(object, subject)
+		q.debug("Getting dnskeys for [%s] from cache.\n", currentLevel)
 		cachedKeys, _, e := q.retrieveCache(q.provider, currentLevel, dns.TypeDNSKEY)
 		if e != nil {
 			/// as argued in the dnskey validation phase, take no chances
 			/// either dnskeys missing from server altogether (very bad) or missing from cache (slightly bad)
-			if forgivingDNSSECCheck {
+			/// make a lookup for DNSKEY for the specific zone
+			// q.debug("LAUNCHING RESOLVE FOR MISSING DNSKEY\n\n\n\n")
+			// qkey := newQueryParam(currentLevel, dns.TypeDNSKEY, q.ilog, q.elog, q.provider, q.rt)
+			// qkey.setChainOfTrust(false) /// ironically
+			// cachedKeys, e = qkey.doResolve(resolveMethodRecursive)
+			// q.debug("FINISHING RESOLVE FOR MISSING DNSKEY\n\n\n\n")
+			if e != nil && forgivingDNSSECCheck {
 				q.setChainOfTrust(false)
 				break
 			}
-			return nil, 0, newError(errorCacheMiss, severityMajor, "cannot produce DNSKEY from cache [%s]", e.String())
+			// return nil, 0, newError(errorCacheMiss, severityMajor, "cannot produce DNSKEY from cache [%s]", e.String())
 		}
-
+		q.debug("Validating signatures.\n")
 		if e := q.validateSignatures(sliceRRtoDNSKEY(cachedKeys), reply); e != nil {
-			if forgivingDNSSECCheck {
-				q.setChainOfTrust(false)
-				break
-			}
+			// if forgivingDNSSECCheck {
+			// 	q.setChainOfTrust(false)
+			// 	break
+			// }
 			q.setChainOfTrust(false)
 			return nil, 0, newError(errorDNSSECBogus, severityFatal, fmt.Sprintf("bogus dnssec response for [%s] [%s]", object, e.Error()))
 		}
@@ -1105,22 +1094,39 @@ func contextIndependentValidateRR(rr dns.RR, domain string) bool {
 }
 
 /// l is a non-nil reference
-func populateFallbackServers(l *[]string, rr []dns.RR) {
+func populateFallbackServers(t string, l *[]string, rr []dns.RR) {
 	*l = make([]string, len(rr))
 	for _, r := range rr {
-		if a, ok := r.(*dns.A); ok {
+		if a, ok := r.(*dns.A); ok && !existingFallback(t, l, r) {
+
 			*l = append(*l, a.A.String())
 		}
 	}
 }
 
-func insertFallbackServer(l *[]string, rr dns.RR) {
+func insertFallbackServer(t string, l *[]string, rr dns.RR) {
 	if *l == nil {
 		*l = make([]string, 0)
 	}
-	if a, ok := rr.(*dns.A); ok {
+	if a, ok := rr.(*dns.A); ok && !existingFallback(t, l, rr) {
 		*l = append(*l, a.A.String())
 	}
+}
+
+func existingFallback(t string, l *[]string, rr dns.RR) bool {
+	a, ok := rr.(*dns.A)
+	if !ok {
+		return false
+	}
+	if t == a.A.String() {
+		return false
+	}
+	for _, item := range *l {
+		if item == a.A.String() {
+			return true
+		}
+	}
+	return false
 }
 
 /// this is the main loop for domain tokens -- returns one ip address or error
@@ -1169,7 +1175,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 			}
 			for _, fallbackRR := range rr2 {
 				if _, ok := fallbackRR.(*dns.A); ok {
-					insertFallbackServer(&fallbackServers, fallbackRR)
+					insertFallbackServer(targetServer, &fallbackServers, fallbackRR)
 				}
 			}
 		}
@@ -1200,7 +1206,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 						q.debug("Skipping step due to already cached value for [%s] -> [%s]\n", token, arr[0].(dns.RR).String())
 						targetServer = arr[0].(*dns.A).A.String()
 						if len(arr) > 1 {
-							populateFallbackServers(&fallbackServers, arr[1:])
+							populateFallbackServers(targetServer, &fallbackServers, arr[1:])
 						}
 						continue
 					}
@@ -1231,7 +1237,12 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 			finalTargetServers = append(finalTargetServers, targetServer)
 			finalTargetServers = append(finalTargetServers, fallbackServers...)
 			var reply *dns.Msg
-			for ind, iteratedTargetServer := range finalTargetServers {
+			maxIter := 2
+			if len(finalTargetServers) < maxIter {
+				maxIter = len(finalTargetServers)
+			}
+			q.errors = 0
+			for ind, iteratedTargetServer := range finalTargetServers[:maxIter] {
 				reply, tw, err = q.simpleResolve(token, iteratedTargetServer, dns.TypeNS, 0)
 				q.timeWasted += tw
 				if err != nil {
@@ -1244,6 +1255,9 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 						q.debug("Error in siple resolve. returning with error.")
 						return nil, err
 					}
+				} else if len(reply.Answer)+len(reply.Ns) == 0 {
+					q.debug("Empty response (ANSWER+AUTHORITY) means try another server")
+					continue
 				} else {
 					break
 				}
@@ -1282,6 +1296,10 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 
 			// }
 
+			if reply == nil {
+				return []dns.RR{}, nil
+			}
+
 			recordHolder := make([]dns.RR, 0) //len(reply.Answer)+len(reply.Ns)+len(reply.Extra))
 			for _, record := range reply.Answer {
 				recordHolder = append(recordHolder, record)
@@ -1290,10 +1308,20 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 				recordHolder = append(recordHolder, record)
 			}
 			for _, record := range reply.Extra {
-				recordHolder = append(recordHolder, record)
+				_, okOPT := record.(*dns.OPT)
+				_, okTSIG := record.(*dns.TSIG)
+				if !okOPT && !okTSIG {
+					recordHolder = append(recordHolder, record)
+				}
 			}
-
+			q.debug("Record holder has [%d] elements.\n", len(recordHolder))
 			foundCNAMEs := make([]*dns.CNAME, 0)
+
+			/// handle the case of NXDOMAIN without accompanying SOA record (<random_alphanum>.dns.grc.com for NS query)
+			/// we have to return and empty NXDOMAIN (TODO: do a lookup for SOA to return?)
+			if len(recordHolder) == 0 && token == q.vanilla && reply.Rcode == dns.RcodeNameError {
+				return []dns.RR{}, newError(errorUnresolvable, severityMajor, "intermediary lookup is NXDOMAIN [%s]", token)
+			}
 
 			/// this is a sloppy variant of the return SOA on intermediary queries
 			if len(recordHolder) == 0 && token != q.vanilla {
@@ -1340,7 +1368,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 						/// we have a NS record without glue, so we go ahead and take the time to resolve it
 						/// because there are surprisingly many cases in which one NS has A record, and it times out often (logically)
 						q.debug("\n\n\nLAUNCHING PEDANTIC INTERMEDIARY RESOLVE FOR [%s]\n\n\n", ns.Ns)
-						qIntermediary := newQueryParam(ns.Ns, dns.TypeA, q.ilog, q.elog, q.provider, q.ips)
+						qIntermediary := newQueryParam(ns.Ns, dns.TypeA, q.ilog, q.elog, q.provider, q.rt)
 						additional, e = qIntermediary.doResolve(resolveMethodRecursiveNonPedantic)
 						if e != nil {
 							q.debug("Cannot resolve intermediary NS [%s]\n", ns.Ns)
@@ -1362,7 +1390,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 						if targetServer == "" {
 							targetServer = a.A.String()
 						} else {
-							insertFallbackServer(&fallbackServers, a)
+							insertFallbackServer(targetServer, &fallbackServers, a)
 						}
 					}
 					// special case handling when queried type is NS:
@@ -1394,7 +1422,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 					if targetServer == "" {
 						targetServer = a.A.String()
 					} else {
-						insertFallbackServer(&fallbackServers, a)
+						insertFallbackServer(targetServer, &fallbackServers, a)
 					}
 					//tw, _ = q.storeCache(q.provider, reply.Question[0].Name, []dns.RR{a})
 					q.timeWasted += tw
@@ -1413,9 +1441,11 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 					if token == q.vanilla && reply.MsgHdr.Rcode == dns.RcodeNameError {
 						/// entry point for negative caching!!! (todo)
 						q.debug("Explicit nxdomain found, for full query string. returning immediately.")
+						/// transferring this here SOA to the result set
+						*q.authority = []dns.RR{rr}
 						return nil, newError(errorUnresolvable, severitySuccess, "domain [%s] is unresolvable", q.vanilla)
 					}
-
+					nxdomainOnFullString := false
 					q.storeCache(q.provider, soa.Hdr.Name, []dns.RR{soa})
 					if token != q.vanilla {
 						/// add negative cache entry as stated in soa record.
@@ -1432,13 +1462,21 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 						shortcut, err := qc.doResolve(resolveMethodRecursive)
 						if err != nil {
 							q.debug("Hail Mary failed [%s]\n", err.String())
-							continue // as in take the next record from the reply in the big loop
+							if err.errorCode == errorUnresolvable {
+								nxdomainOnFullString = true
+								*q.authority = *qc.authority
+							}
+							//continue // as in take the next record from the reply in the big loop
+						} else {
+							defer qc.join()
+							q.debug("Tried the good old query-more-tokens-on-soa trick with success.")
+							return shortcut, nil
 						}
-						/// jackpot -- store cache (it advertised itself as authroitative, so ANSWER section should be where data is at)
-						/// caching already handled via doLookup
-						defer qc.join()
-						q.debug("Tried the good old query-more-tokens-on-soa trick with success.")
-						return shortcut, nil
+					}
+					/// extend this condition with NXDOMAIN on full query string
+					if reply.MsgHdr.Rcode == dns.RcodeNameError || nxdomainOnFullString {
+						q.debug("Explicit nxdomain found, for partial query string. adding more tokens did not work. returning with NXDOMAIN.")
+						return nil, newError(errorUnresolvable, severitySuccess, "domain [%s] is unresolvable", q.vanilla)
 					}
 
 					/// this is the tricky part:
@@ -1466,8 +1504,13 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 							q.timeWasted += soaCont.timeWasted
 							cnameSlice := make([]*dns.CNAME, 0)
 							addressSlice := make([]*dns.A, 0)
+							q.debug("Luring out ended.\n\n")
 							/// means it has no CNAME at the end
 							if err != nil {
+								if err.errorCode == errorDNSSECBogus {
+									q.setChainOfTrust(false)
+									return nil, err
+								}
 								targetServer = oldTargetServer
 								break
 							} else {
@@ -1488,7 +1531,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 
 								if len(cnameSlice) > 0 {
 									finalTarget := untangleCNAMEindirections(token, cnameSlice)
-									soaDerefCont := newQueryParam(finalTarget.Target, q.record, q.ilog, q.elog, q.provider, q.ips)
+									soaDerefCont := newQueryParam(finalTarget.Target, q.record, q.ilog, q.elog, q.provider, q.rt)
 									soaDerefRes, err := soaDerefCont.doResolve(resolveMethodRecursive)
 									q.logBuffer.Write(soaDerefCont.logBuffer.Bytes())
 									q.timeWasted += soaDerefCont.timeWasted
@@ -1502,6 +1545,10 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 									//q.result = append(q.result, addressSlice...)
 									return q.result, nil
 								}
+							}
+							/// if we have only SOA in record holder and target server is still empty (and we already did an A on the same server), return that result set
+							if len(recordHolder) == 1 && targetServer == "" {
+								return soaCNAME, nil
 							}
 
 						}
@@ -1555,7 +1602,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 				q.timeWasted += tw
 				/// this is not cool, we'll have to resolve the canonical name to get a usable ip address
 				q.debug("Going further down the rabbithole, via CNAME redirection [%s]\n", cname.Target)
-				newq := newQueryParam(cname.Target, q.record, q.ilog, q.elog, q.provider, q.ips)
+				newq := newQueryParam(cname.Target, q.record, q.ilog, q.elog, q.provider, q.rt)
 				cnameDereference, err := newq.doResolve(resolveMethodRecursive)
 				q.logBuffer.Write(newq.logBuffer.Bytes())
 				/// this is an aggregated check for no error, and no nxdomain (et al)
@@ -1634,7 +1681,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 						q.debug("Success from cache.\n")
 						targetServer = a.A.String()
 						if len(arr) > 1 {
-							populateFallbackServers(&fallbackServers, arr[1:])
+							populateFallbackServers(targetServer, &fallbackServers, arr[1:])
 						}
 						break
 					}
@@ -1656,7 +1703,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 					if tHost != "" {
 						q.debug("Trying to resolve eluding host. Launching sub-resolve for [%s]\n\n", tHost)
 						/// resolve meaning A record, to be used further
-						newq := newQueryParam(tHost, dns.TypeA, q.ilog, q.elog, q.provider, q.ips)
+						newq := newQueryParam(tHost, dns.TypeA, q.ilog, q.elog, q.provider, q.rt)
 						_targetServer, err := newq.doResolve(resolveMethodRecursive)
 						q.logBuffer.Write(newq.logBuffer.Bytes())
 						if err != nil {
@@ -1666,7 +1713,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 						}
 						targetServer = _targetServer[0].(*dns.A).A.String()
 						if len(_targetServer) > 1 {
-							populateFallbackServers(&fallbackServers, _targetServer[1:])
+							populateFallbackServers(targetServer, &fallbackServers, _targetServer[1:])
 						}
 						q.debug("Sub-Resolve end >>>[%s]\n\n", tHost)
 						q.timeWasted += newq.timeWasted
@@ -1680,6 +1727,15 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 						break
 					}
 				}
+			}
+
+			/// we did not found the next step IP (in this specific case, the final query IP)
+			/// some cases when an authoritative server serves 2 levels (eg. asd.domain.com, and domain.com)
+			/// won't reply anything to a NS query for asd.domain.com
+			/// this catches that, and diverts execution to final query
+			if targetServer == "" && len(recordHolder) == 0 {
+				targetServer = oldTargetServer
+				break
 			}
 
 			/// means we have a serious problem on our hands, we have to bail, and perhaps add a negative cache entry
@@ -1702,11 +1758,20 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 	wantsToErrorOut := false
 	var reply *dns.Msg
 	q.debug("TargetServer is [%s] and backupServers are [%v]\n", targetServer, fallbackServers)
-	for ind, iteratedTargetServer := range finalTargetServers {
+	maxIter := 2
+	if len(finalTargetServers) < maxIter {
+		maxIter = len(finalTargetServers)
+	}
+	for ind, iteratedTargetServer := range finalTargetServers[:maxIter] {
 		q.debug(">>> FINAL - Querying [%s] about [%s]<<<\n", iteratedTargetServer, q.vanilla)
 		reply, tw, err = q.simpleResolve(q.vanilla, iteratedTargetServer, q.record, 0)
 		q.timeWasted += tw
 		if err != nil {
+			/// on dnssec validation error, no more chit-chat, just exit with servfail
+			if err.errorCode == errorDNSSECBogus {
+				q.debug("DNSSEC validation failed. Exiting immediately.\n")
+				return nil, err
+			}
 			if ind < len(finalTargetServers)-1 {
 				continue
 			}
@@ -1719,6 +1784,9 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 				}
 				return nil, err
 			}
+		} else if len(reply.Answer)+len(reply.Ns) == 0 {
+			q.debug("Empty response means try another server")
+			continue
 		} else {
 			break
 		}
@@ -1745,6 +1813,12 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 		return nil, err
 	}
 
+	/// due to refused or any other issue that is considered error by simpleResolve()
+	/// just return an empty result set
+	if reply == nil {
+		return []dns.RR{}, nil
+	}
+
 	q.debug("CD flag is [%v]\n", q.CDFlagSet)
 	// there's no way around it, ned to handle cnames in the final query too
 	finalCnames := make([]*dns.CNAME, 0)
@@ -1765,7 +1839,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 	if len(finalCnames) > 0 && q.record != dns.TypeCNAME {
 		q.debug("Final query CNAME caught, and handled.\n")
 		lastCNAME := untangleCNAMEindirections(q.vanilla, finalCnames)
-		qfinal := newQueryParam(lastCNAME.Target, q.record, q.ilog, q.elog, q.provider, q.ips)
+		qfinal := newQueryParam(lastCNAME.Target, q.record, q.ilog, q.elog, q.provider, q.rt)
 		//qfinal.addToResultSet(finalCnameRR)
 		res, err := qfinal.doResolve(resolveMethodRecursive)
 		q.logBuffer.Write(qfinal.logBuffer.Bytes())
@@ -1777,14 +1851,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 
 	/// if ANSWER section is empty, return last result (which is 0 answer, and 1 authority (SOA))
 	if len(resultRR) == 0 {
-		*q.authority = make([]dns.RR, len(reply.Ns))
-		*q.additional = make([]dns.RR, len(reply.Extra))
-		for i, rr := range reply.Ns {
-			(*q.authority)[i], _ = dns.NewRR(rr.String())
-		}
-		for i, rr := range reply.Extra {
-			(*q.additional)[i], _ = dns.NewRR(rr.String())
-		}
+		*q.authority = reply.Ns
 		fmt.Printf("Copying [%d] records\n", len(reply.Ns)+len(reply.Extra))
 		return resultRR, nil
 	}
@@ -1800,6 +1867,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 }
 
 func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime.Runtime, operatorID string) dnsHandler {
+
 	l := loggy
 	return func(w dns.ResponseWriter, r *dns.Msg) {
 		startTime := time.Now()
@@ -1839,7 +1907,7 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 		l = l.WithField("domain", r.Question[0].Name)
 		elogger := new(nlog.EventualLogger)
 		elogger.Queuef("%v -- STARTING NEW TOPLEVEL RESOLVE FOR [%s][RecDesired - %v]", time.Now(), r.Question[0].Name, r.RecursionDesired)
-		qp := newQueryParam(r.Question[0].Name, r.Question[0].Qtype, l, elogger, provider, rt.IPPool)
+		qp := newQueryParam(r.Question[0].Name, r.Question[0].Qtype, l, elogger, provider, rt)
 		qp.CDFlagSet = r.CheckingDisabled
 		resolveMethodToUse := resolveMethodRecursive
 		if r.RecursionDesired == false {
@@ -1849,20 +1917,20 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 		answer, err := qp.doResolve(resolveMethodToUse)
 		resolvTime := time.Now().Sub(startTime)
 		response := new(dns.Msg)
+
 		if err != nil {
 			elogger.Queuef("RESOLVE RETURNED ERROR [%s]", err.String())
-			if err.errorCode != errorUnresolvable && err.errorCode != errorCannotResolve {
+			if err.errorCode != errorUnresolvable {
 				elogger.Queuef("Failed for [%s -- %d] - [%s]", qp.vanilla, qp.record, err)
 				rt.Stats.Count(StatsQueryFailure)
 				response.SetRcode(r, dns.RcodeServerFailure)
+				rt.SlackWH.SendFeedback(runtime.NewPayload(operatorID, fmt.Sprintf("%s [%s/RD=%v/CD=%v]",
+					qp.vanilla, dns.TypeToString[r.Question[0].Qtype], r.RecursionDesired, r.CheckingDisabled), err.String(), ""))
 			} else {
 				elogger.Queuef("[%s -- %d] unresolvable.", qp.vanilla, qp.record)
-				if err.errorCode == errorUnresolvable {
-					response.SetRcode(r, dns.RcodeNameError)
-				}
+				response.SetRcode(r, dns.RcodeNameError)
 			}
 			elogger.Flush(l)
-			rt.SlackWH.SendFeedback(runtime.NewPayload(operatorID, qp.vanilla, err.String(), ""))
 		} else {
 			elogger.Queuef("ANSWER is: [%v][%v][%s]", resolvTime, qp.timeWasted, answer)
 			response.SetRcode(r, dns.RcodeSuccess)
@@ -1876,6 +1944,7 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 		response.Answer = answer
 		response.Ns = *qp.authority
 		response.Extra = *qp.additional
+		response.SetEdns0(4096, false)
 		w.WriteMsg(response)
 	}
 }
@@ -1884,40 +1953,44 @@ func ServeDNS(cfg runtime.RecursorConfig, rt *runtime.Runtime, v4 bool, net stri
 	// TODO: Get rid of these old variables variables
 	*dnssecEnabled = dnssecMode
 	*debugLevel = true
-
 	provider := "tenta"
 	if opennicMode == true {
 		provider = "opennic"
 	}
-
 	ip, port := hostInfo(v4, net, d)
 	addr := fmt.Sprintf("%s:%d", ip, port)
 	lg := nlog.GetLogger("dnsrecursor").WithField("host_name", d.HostName).WithField("address", ip).WithField("port", port).WithField("proto", net)
 	logger.ilog = lg
-	operator := fmt.Sprintf("%s/%s/%s", provider, net, ip)
-	rt.SlackWH.SendMessage(fmt.Sprintf("Operator `%s` started up.", operator))
+	operator := fmt.Sprintf("%s/%s", provider, net)
+	rt.SlackWH.SendMessage("started up.", operator)
 
 	notifyStarted := func() {
 		lg.Infof("Started %s dns recursor on %s", net, addr)
 	}
 	lg.Debugf("Preparing %s dns recursor on %s", net, addr)
 
+	pchan := make(chan interface{}, 1)
+	srv := &dns.Server{Addr: addr, Net: net, NotifyStartedFunc: notifyStarted, Handler: dns.HandlerFunc(dnsRecoverWrap(handleDNSMessage(lg, provider, net, rt, operator), pchan))}
+	defer rt.OnFinishedOrPanic(func() {
+		srv.Shutdown()
+		lg.Infof("Stopped %s dns resolver on %s", net, addr)
+		rt.SlackWH.SendMessage("shutting down.", operator)
+	}, pchan)
+	defer func() {
+		if rcv := recover(); rcv != nil {
+			snd := &StackAddedPanic{debug.Stack(), rcv}
+			fmt.Printf("Panic in ServeDNS [%s]\n", snd)
+			pchan <- snd
+		}
+	}()
+
 	if dnssecMode {
-		if e := getTrustedRootAnchors(lg, provider, rt.IPPool); e != nil {
+		if e := getTrustedRootAnchors(lg, provider, rt); e != nil {
 			panic(fmt.Sprintf("Cannot obtain root trust anchors. [%v]\n", e))
 		}
 	}
 
 	transferRootZone(lg, provider)
-
-	pchan := make(chan interface{}, 1)
-	srv := &dns.Server{Addr: addr, Net: net, NotifyStartedFunc: notifyStarted, Handler: dns.HandlerFunc(dnsRecoverWrap(handleDNSMessage(lg, provider, net, rt, operator), pchan))}
-
-	defer rt.OnFinishedOrPanic(func() {
-		srv.Shutdown()
-		lg.Infof("Stopped %s dns resolver on %s", net, addr)
-		rt.SlackWH.SendMessage(fmt.Sprintf("Operator `%s` shutting down.", operator))
-	}, pchan)
 
 	if net == "tls" {
 		go func() {
