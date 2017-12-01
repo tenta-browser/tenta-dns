@@ -1,7 +1,7 @@
 package responder
 
 import (
-	"tenta-dns/runtime"
+	"github.com/tenta-browser/tenta-dns/runtime"
 	"fmt"
 )
 

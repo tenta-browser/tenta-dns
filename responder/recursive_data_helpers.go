@@ -6,8 +6,8 @@ import (
 	"io/ioutil"
 	"net/http"
 	"strings"
-	"tenta-dns/log"
-	"tenta-dns/runtime"
+	"github.com/tenta-browser/tenta-dns/log"
+	"github.com/tenta-browser/tenta-dns/runtime"
 
 	"github.com/miekg/dns"
 	"github.com/sirupsen/logrus"

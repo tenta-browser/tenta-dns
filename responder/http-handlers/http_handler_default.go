@@ -24,8 +24,8 @@ package http_handlers
 
 import (
 	"net/http"
-	"tenta-dns/common"
-	"tenta-dns/runtime"
+	"github.com/tenta-browser/tenta-dns/common"
+	"github.com/tenta-browser/tenta-dns/runtime"
 
 	"github.com/sirupsen/logrus"
 )

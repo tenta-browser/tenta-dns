@@ -25,7 +25,7 @@
 package anycast
 
 import (
-	"tenta-dns/common"
+	"github.com/tenta-browser/tenta-dns/common"
 
 	"github.com/sirupsen/logrus"
 )

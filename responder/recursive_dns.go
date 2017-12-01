@@ -35,8 +35,8 @@ import (
 	"reflect"
 	"runtime/debug"
 	"strings"
-	nlog "tenta-dns/log"
-	"tenta-dns/runtime"
+	nlog "github.com/tenta-browser/tenta-dns/log"
+	"github.com/tenta-browser/tenta-dns/runtime"
 	"time"
 
 	"github.com/miekg/dns"

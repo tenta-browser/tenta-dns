@@ -28,8 +28,8 @@ import (
 	"net"
 	"strconv"
 	"strings"
-	"tenta-dns/common"
-	"tenta-dns/runtime"
+	"github.com/tenta-browser/tenta-dns/common"
+	"github.com/tenta-browser/tenta-dns/runtime"
 	"time"
 
 	"github.com/leonelquinteros/gorand"

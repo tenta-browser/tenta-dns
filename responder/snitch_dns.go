@@ -29,11 +29,11 @@ import (
 	"net"
 	"regexp"
 	"strconv"
-	"tenta-dns/common"
-	"tenta-dns/runtime"
+	"github.com/tenta-browser/tenta-dns/common"
+	"github.com/tenta-browser/tenta-dns/runtime"
 	"time"
 
-	"tenta-dns/log"
+	"github.com/tenta-browser/tenta-dns/log"
 
 	"github.com/leonelquinteros/gorand"
 	"github.com/miekg/dns"

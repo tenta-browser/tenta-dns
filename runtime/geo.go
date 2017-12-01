@@ -26,8 +26,8 @@ import (
 	"fmt"
 	"net"
 	"path/filepath"
-	"tenta-dns/common"
-	"tenta-dns/log"
+	"github.com/tenta-browser/tenta-dns/common"
+	"github.com/tenta-browser/tenta-dns/log"
 	"time"
 
 	"github.com/oschwald/maxminddb-golang"

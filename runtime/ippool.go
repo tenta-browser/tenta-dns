@@ -25,7 +25,7 @@ package runtime
 import (
 	"math/rand"
 	"net"
-	"tenta-dns/log"
+	"github.com/tenta-browser/tenta-dns/log"
 	"time"
 )
 

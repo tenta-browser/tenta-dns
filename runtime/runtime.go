@@ -26,7 +26,7 @@ import (
 	"encoding/binary"
 	"os"
 	"sync"
-	"tenta-dns/log"
+	"github.com/tenta-browser/tenta-dns/log"
 	"time"
 
 	"github.com/sirupsen/logrus"

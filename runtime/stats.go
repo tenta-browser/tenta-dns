@@ -28,7 +28,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"tenta-dns/log"
+	"github.com/tenta-browser/tenta-dns/log"
 	"time"
 
 	"github.com/sasha-s/go-hll"

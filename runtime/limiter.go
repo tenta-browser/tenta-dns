@@ -27,7 +27,7 @@ import (
 	"math/rand"
 	"net"
 	"sync"
-	"tenta-dns/log"
+	"github.com/tenta-browser/tenta-dns/log"
 	"time"
 
 	"github.com/sirupsen/logrus"

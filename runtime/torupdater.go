@@ -29,7 +29,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"tenta-dns/log"
+	"github.com/tenta-browser/tenta-dns/log"
 	"time"
 )
 

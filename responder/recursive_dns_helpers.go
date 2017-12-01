@@ -2,7 +2,7 @@ package responder
 
 import (
 	"github.com/miekg/dns"
-	"tenta-dns/runtime"
+	"github.com/tenta-browser/tenta-dns/runtime"
 )
 
 // Politely decline to answer ANY queries

@@ -26,8 +26,8 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"tenta-dns/common"
-	"tenta-dns/runtime"
+	"github.com/tenta-browser/tenta-dns/common"
+	"github.com/tenta-browser/tenta-dns/runtime"
 
 	"github.com/gorilla/mux"
 	"github.com/sirupsen/logrus"

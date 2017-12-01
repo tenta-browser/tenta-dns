@@ -28,9 +28,9 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"tenta-dns/director"
-	"tenta-dns/log"
-	"tenta-dns/runtime"
+	"github.com/tenta-browser/tenta-dns/director"
+	"github.com/tenta-browser/tenta-dns/log"
+	"github.com/tenta-browser/tenta-dns/runtime"
 
 	"github.com/coreos/go-systemd/daemon"
 	"github.com/sirupsen/logrus"

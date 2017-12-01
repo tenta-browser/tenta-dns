@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"tenta-dns/log"
+	"github.com/tenta-browser/tenta-dns/log"
 
 	"github.com/miekg/dns"
 )

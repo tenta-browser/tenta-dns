@@ -35,7 +35,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"tenta-dns/log"
+	"github.com/tenta-browser/tenta-dns/log"
 	"time"
 
 	"github.com/syndtr/goleveldb/leveldb"

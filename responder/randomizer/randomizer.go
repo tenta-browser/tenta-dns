@@ -29,9 +29,9 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"tenta-dns/common"
-	"tenta-dns/log"
-	"tenta-dns/runtime"
+	"github.com/tenta-browser/tenta-dns/common"
+	"github.com/tenta-browser/tenta-dns/log"
+	"github.com/tenta-browser/tenta-dns/runtime"
 	"unicode"
 
 	"github.com/leonelquinteros/gorand"

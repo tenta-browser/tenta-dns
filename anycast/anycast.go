@@ -28,8 +28,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"tenta-dns/common"
-	"tenta-dns/log"
+	"github.com/tenta-browser/tenta-dns/common"
+	"github.com/tenta-browser/tenta-dns/log"
 	"time"
 
 	api "github.com/osrg/gobgp/api"

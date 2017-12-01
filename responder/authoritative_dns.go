@@ -25,9 +25,9 @@ package responder
 import (
 	"crypto/tls"
 	"fmt"
-	"tenta-dns/log"
-	"tenta-dns/runtime"
-	"tenta-dns/zones"
+	"github.com/tenta-browser/tenta-dns/log"
+	"github.com/tenta-browser/tenta-dns/runtime"
+	"github.com/tenta-browser/tenta-dns/zones"
 
 	"github.com/miekg/dns"
 	"github.com/sirupsen/logrus"

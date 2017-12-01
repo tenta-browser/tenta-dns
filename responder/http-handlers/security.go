@@ -31,7 +31,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
-	"tenta-dns/runtime"
+	"github.com/tenta-browser/tenta-dns/runtime"
 	"time"
 )
 

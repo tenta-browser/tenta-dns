@@ -24,7 +24,7 @@ package director
 
 import (
 	"sync/atomic"
-	"tenta-dns/runtime"
+	"github.com/tenta-browser/tenta-dns/runtime"
 	"time"
 )
 

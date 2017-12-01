@@ -27,7 +27,7 @@ package anycast
 import (
 	"fmt"
 	"net"
-	"tenta-dns/common"
+	"github.com/tenta-browser/tenta-dns/common"
 
 	"github.com/milosgajdos83/tenus"
 	"github.com/sirupsen/logrus"

@@ -25,9 +25,9 @@ package http_handlers
 import (
 	"fmt"
 	"net/http"
-	"tenta-dns/common"
-	"tenta-dns/responder/randomizer"
-	"tenta-dns/runtime"
+	"github.com/tenta-browser/tenta-dns/common"
+	"github.com/tenta-browser/tenta-dns/responder/randomizer"
+	"github.com/tenta-browser/tenta-dns/runtime"
 
 	"github.com/sirupsen/logrus"
 )

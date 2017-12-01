@@ -27,7 +27,7 @@ import (
 	"math/big"
 	"net"
 	"os"
-	"tenta-dns/log"
+	"github.com/tenta-browser/tenta-dns/log"
 )
 
 func AddSuffix(start []byte, suffix string) []byte {

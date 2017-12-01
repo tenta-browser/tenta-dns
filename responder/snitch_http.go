@@ -26,9 +26,9 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net/http"
-	"tenta-dns/log"
-	handlers "tenta-dns/responder/http-handlers"
-	"tenta-dns/runtime"
+	"github.com/tenta-browser/tenta-dns/log"
+	handlers "github.com/tenta-browser/tenta-dns/responder/http-handlers"
+	"github.com/tenta-browser/tenta-dns/runtime"
 	"time"
 
 	"github.com/gorilla/mux"

@@ -15,7 +15,7 @@ import (
 	"runtime"
 	"strconv"
 	"sync"
-	"tenta-dns/log"
+	"github.com/tenta-browser/tenta-dns/log"
 	"time"
 
 	"github.com/miekg/dns"
