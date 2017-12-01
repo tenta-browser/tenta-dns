@@ -1933,8 +1933,11 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 				elogger.Queuef("Failed for [%s -- %d] - [%s]", qp.vanilla, qp.record, err)
 				rt.Stats.Count(StatsQueryFailure)
 				response.SetRcode(r, dns.RcodeServerFailure)
-				rt.SlackWH.SendFeedback(runtime.NewPayload(operatorID, fmt.Sprintf("%s [%s/RD=%v/CD=%v]",
-					qp.vanilla, dns.TypeToString[r.Question[0].Qtype], r.RecursionDesired, r.CheckingDisabled), err.String(), ""))
+				/// supress error messages about failed PTR lookups, and queries with RD unset
+				if r.Question[0].Qtype != dns.TypePTR && r.RecursionDesired {
+					rt.SlackWH.SendFeedback(runtime.NewPayload(operatorID, fmt.Sprintf("%s [%s/RD=%v/CD=%v]",
+						qp.vanilla, dns.TypeToString[r.Question[0].Qtype], r.RecursionDesired, r.CheckingDisabled), err.String(), ""))
+				}
 			} else {
 				elogger.Queuef("[%s -- %d] unresolvable.", qp.vanilla, qp.record)
 				response.SetRcode(r, dns.RcodeNameError)
