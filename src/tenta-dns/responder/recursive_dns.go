@@ -665,7 +665,7 @@ func doTLSDiscovery(target, provider string, rt *runtime.Runtime) (tw time.Durat
 func findMatching(ds *dns.DS, dnskeyArr []*dns.DNSKEY) bool {
 	for _, dnskey := range dnskeyArr {
 		//fmt.Printf("cmp:: matching\n%s\n%s\n", dnskey.ToDS(ds.DigestType).String(), ds.String())
-		if equalsDS(dnskey.ToDS(ds.DigestType), ds) {
+		if td := dnskey.ToDS(ds.DigestType); td != nil && equalsDS(dnskey.ToDS(ds.DigestType), ds) {
 			return true
 		}
 	}
@@ -868,8 +868,9 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16, sugges
 			return nil, 0, newError(errorCacheMiss, severityMajor, "cannot fetch DS records [%s]", e.String())
 		}
 		for _, rr := range pubDS {
-
-			if pds, ok := rr.(*dns.DS); ok && findMatching(pds, k) {
+			pds, ok := rr.(*dns.DS)
+			fmt.Printf("Trying to match [%v]\nVS\n[%v]", pds, k)
+			if ok && findMatching(pds, k) {
 				q.debug("matched!!!\n")
 				numDSMatched++
 			}
