@@ -1892,6 +1892,14 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 			return
 		}
 
+		// drop queries about `local' TLD
+		if qtok := strings.Split(r.Question[0].Name, "."); (len(qtok) > 0 && qtok[len(qtok)-1] == "local") || (len(qtok) > 1 && qtok[len(qtok)-2] == "local" && qtok[len(qtok)-1] == "") {
+			if network != "udp" {
+				w.Close()
+			}
+			return
+		}
+
 		// Check with rate limiter (and save to stats on false)
 		if network == "udp" && !w.RemoteAddr().(*net.UDPAddr).IP.IsLoopback() && !rt.RateLimiter.CountAndPass(net.ParseIP(w.RemoteAddr().String())) {
 			rt.Stats.Tick("resolver", "throttled")
