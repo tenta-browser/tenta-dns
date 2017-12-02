@@ -665,7 +665,7 @@ func doTLSDiscovery(target, provider string, rt *runtime.Runtime) (tw time.Durat
 func findMatching(ds *dns.DS, dnskeyArr []*dns.DNSKEY) bool {
 	for _, dnskey := range dnskeyArr {
 		//fmt.Printf("cmp:: matching\n%s\n%s\n", dnskey.ToDS(ds.DigestType).String(), ds.String())
-		if equalsDS(dnskey.ToDS(ds.DigestType), ds) {
+		if td := dnskey.ToDS(ds.DigestType); td != nil && equalsDS(dnskey.ToDS(ds.DigestType), ds) {
 			return true
 		}
 	}
@@ -868,8 +868,9 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16, sugges
 			return nil, 0, newError(errorCacheMiss, severityMajor, "cannot fetch DS records [%s]", e.String())
 		}
 		for _, rr := range pubDS {
-
-			if pds, ok := rr.(*dns.DS); ok && findMatching(pds, k) {
+			pds, ok := rr.(*dns.DS)
+			fmt.Printf("Trying to match [%v]\nVS\n[%v]", pds, k)
+			if ok && findMatching(pds, k) {
 				q.debug("matched!!!\n")
 				numDSMatched++
 			}
@@ -1891,6 +1892,14 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 			return
 		}
 
+		// drop queries about `local' TLD
+		if qtok := strings.Split(r.Question[0].Name, "."); (len(qtok) > 0 && qtok[len(qtok)-1] == "local") || (len(qtok) > 1 && qtok[len(qtok)-2] == "local" && qtok[len(qtok)-1] == "") {
+			if network != "udp" {
+				w.Close()
+			}
+			return
+		}
+
 		// Check with rate limiter (and save to stats on false)
 		if network == "udp" && !w.RemoteAddr().(*net.UDPAddr).IP.IsLoopback() && !rt.RateLimiter.CountAndPass(net.ParseIP(w.RemoteAddr().String())) {
 			rt.Stats.Tick("resolver", "throttled")
@@ -1924,8 +1933,11 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 				elogger.Queuef("Failed for [%s -- %d] - [%s]", qp.vanilla, qp.record, err)
 				rt.Stats.Count(StatsQueryFailure)
 				response.SetRcode(r, dns.RcodeServerFailure)
-				rt.SlackWH.SendFeedback(runtime.NewPayload(operatorID, fmt.Sprintf("%s [%s/RD=%v/CD=%v]",
-					qp.vanilla, dns.TypeToString[r.Question[0].Qtype], r.RecursionDesired, r.CheckingDisabled), err.String(), ""))
+				/// supress error messages about failed PTR lookups, and queries with RD unset
+				if r.Question[0].Qtype != dns.TypePTR && r.RecursionDesired {
+					rt.SlackWH.SendFeedback(runtime.NewPayload(operatorID, fmt.Sprintf("%s [%s/RD=%v/CD=%v]",
+						qp.vanilla, dns.TypeToString[r.Question[0].Qtype], r.RecursionDesired, r.CheckingDisabled), err.String(), ""))
+				}
 			} else {
 				elogger.Queuef("[%s -- %d] unresolvable.", qp.vanilla, qp.record)
 				response.SetRcode(r, dns.RcodeNameError)
