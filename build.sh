@@ -19,9 +19,7 @@
 #
 # build.sh: *nix/Mac build wrapper
 
-GOPATH=`pwd`
-
-echo "Compiling to $GOPATH/bin"
+echo "Compiling to GOPATH/bin"
 
 version="development`date -u +.%Y%m%d.%H%M%S`"
 if [ -n "$BUILD_ID" ]; then
@@ -30,5 +28,5 @@ fi
 
 echo "Compiling version $version"
 
-go install -ldflags "-X main.version=$version" -v tenta-dns
-go install -ldflags "-X main.version=$version" -v tenta-dns/stresser
+go install -ldflags "-X main.version=$version" -v github.com/tenta-browser/tenta-dns
+go install -ldflags "-X main.version=$version" -v github.com/tenta-browser/tenta-dns/stresser

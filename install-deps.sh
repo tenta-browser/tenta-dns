@@ -20,15 +20,6 @@
 #
 # install-deps.sh: Install libs on *nix / Mac
 
-GOPATH=`pwd`
+echo "Installing dependencies to GOPATH/pkg"
 
-echo "Installing dependencies to $GOPATH/pkg"
-
-oldifs=$IFS
-IFS='
-'
-for line in `cat ./deps.list`; do
-    echo "Installing $line"
-    go get -u -v $line
-done
-IFS=$oldifs
+go get -u -v github.com/tenta-browser/tenta-dns/...
