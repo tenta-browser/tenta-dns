@@ -19,11 +19,7 @@
 ::# install-deps.bat: Windows dependency installer
 
 @ECHO OFF
-set GOPATH=%CD%
 
-echo Installing dependencies to %GOPATH%\pkg
+echo Installing dependencies to GOPATH\pkg
 
-for /F "tokens=*" %%A in (deps.list) do (
-    echo Installing %%A
-    go get -u -v %%A
-)
+go get -u -v github.com/tenta-browser/tenta-dns/...

@@ -19,9 +19,6 @@
 ::# build.bat: Windows build wrapper
 
 @ECHO OFF
-set GOPATH=%CD%
 
-echo Compiling to %GOPATH%\bin
-
-go install -v tenta-dns
-go install -v tenta-dns/stresser
+go install -v github.com/tenta-browser/tenta-dns
+go install -v github.com/tenta-browser/tenta-dns/stresser
