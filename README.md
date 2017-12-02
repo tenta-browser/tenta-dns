@@ -1,6 +1,10 @@
 Tenta DNS
 =========
 
+[![Build Status](https://travis-ci.org/tenta-browser/tenta-dns.svg?branch=master)](https://travis-ci.org/tenta-browser/tenta-dns)
+[![Go Report Card](https://goreportcard.com/badge/github.com/tenta-browser/tenta-dns)](https://goreportcard.com/report/github.com/tenta-browser/tenta-dns)
+[![GoDoc](https://godoc.org/github.com/tenta-browser/tenta-dns?status.svg)](https://godoc.org/github.com/tenta-browser/tenta-dns)
+
 ![Tenta Gopher](logo.png?raw=true "Tenta Gopher")
 
 A full-fledged DNS solution, including DNSSEC and DNS-over-TLS
