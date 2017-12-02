@@ -869,7 +869,6 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16, sugges
 		}
 		for _, rr := range pubDS {
 			pds, ok := rr.(*dns.DS)
-			fmt.Printf("Trying to match [%v]\nVS\n[%v]", pds, k)
 			if ok && findMatching(pds, k) {
 				q.debug("matched!!!\n")
 				numDSMatched++
