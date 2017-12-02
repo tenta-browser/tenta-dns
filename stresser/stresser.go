@@ -6,6 +6,7 @@ import (
 	"encoding/csv"
 	"flag"
 	"fmt"
+	"github.com/tenta-browser/tenta-dns/log"
 	"io"
 	"io/ioutil"
 	"math/rand"
@@ -15,7 +16,6 @@ import (
 	"runtime"
 	"strconv"
 	"sync"
-	"github.com/tenta-browser/tenta-dns/log"
 	"time"
 
 	"github.com/miekg/dns"

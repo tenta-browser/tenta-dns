@@ -3,11 +3,11 @@ package responder
 import (
 	"encoding/xml"
 	"fmt"
+	"github.com/tenta-browser/tenta-dns/log"
+	"github.com/tenta-browser/tenta-dns/runtime"
 	"io/ioutil"
 	"net/http"
 	"strings"
-	"github.com/tenta-browser/tenta-dns/log"
-	"github.com/tenta-browser/tenta-dns/runtime"
 
 	"github.com/miekg/dns"
 	"github.com/sirupsen/logrus"

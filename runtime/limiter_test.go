@@ -23,8 +23,8 @@
 package runtime
 
 import (
-	"net"
 	"github.com/tenta-browser/tenta-dns/log"
+	"net"
 	"testing"
 	"time"
 

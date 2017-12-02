@@ -25,9 +25,9 @@ package http_handlers
 import (
 	"encoding/binary"
 	"fmt"
-	"net/http"
 	"github.com/tenta-browser/tenta-dns/common"
 	"github.com/tenta-browser/tenta-dns/runtime"
+	"net/http"
 	"time"
 
 	"github.com/sirupsen/logrus"

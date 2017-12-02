@@ -26,10 +26,10 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"github.com/tenta-browser/tenta-dns/log"
 	"io"
 	"net/http"
 	"strings"
-	"github.com/tenta-browser/tenta-dns/log"
 	"time"
 )
 

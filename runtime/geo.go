@@ -24,10 +24,10 @@ package runtime
 
 import (
 	"fmt"
-	"net"
-	"path/filepath"
 	"github.com/tenta-browser/tenta-dns/common"
 	"github.com/tenta-browser/tenta-dns/log"
+	"net"
+	"path/filepath"
 	"time"
 
 	"github.com/oschwald/maxminddb-golang"

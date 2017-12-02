@@ -25,10 +25,10 @@ package runtime
 import (
 	"encoding/binary"
 	"fmt"
+	"github.com/tenta-browser/tenta-dns/log"
 	"strconv"
 	"strings"
 	"sync"
-	"github.com/tenta-browser/tenta-dns/log"
 	"time"
 
 	"github.com/sasha-s/go-hll"

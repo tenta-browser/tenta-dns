@@ -1,8 +1,8 @@
 package responder
 
 import (
-	"github.com/tenta-browser/tenta-dns/runtime"
 	"fmt"
+	"github.com/tenta-browser/tenta-dns/runtime"
 )
 
 func hostInfo(v4 bool, net string, d *runtime.ServerDomain) (ip string, port int) {

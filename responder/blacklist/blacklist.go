@@ -25,11 +25,11 @@ package blacklist
 import (
 	"bytes"
 	"fmt"
+	"github.com/tenta-browser/tenta-dns/common"
+	"github.com/tenta-browser/tenta-dns/runtime"
 	"net"
 	"strconv"
 	"strings"
-	"github.com/tenta-browser/tenta-dns/common"
-	"github.com/tenta-browser/tenta-dns/runtime"
 	"time"
 
 	"github.com/leonelquinteros/gorand"

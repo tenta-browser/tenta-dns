@@ -25,10 +25,10 @@ package responder
 import (
 	"crypto/tls"
 	"fmt"
-	"net/http"
 	"github.com/tenta-browser/tenta-dns/log"
 	handlers "github.com/tenta-browser/tenta-dns/responder/http-handlers"
 	"github.com/tenta-browser/tenta-dns/runtime"
+	"net/http"
 	"time"
 
 	"github.com/gorilla/mux"

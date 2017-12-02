@@ -25,10 +25,10 @@ package http_handlers
 import (
 	"encoding/json"
 	"fmt"
-	"net"
-	"net/http"
 	"github.com/tenta-browser/tenta-dns/common"
 	"github.com/tenta-browser/tenta-dns/runtime"
+	"net"
+	"net/http"
 	"time"
 
 	"github.com/leonelquinteros/gorand"

@@ -23,11 +23,11 @@
 package runtime
 
 import (
+	"github.com/tenta-browser/tenta-dns/log"
 	"math"
 	"math/rand"
 	"net"
 	"sync"
-	"github.com/tenta-browser/tenta-dns/log"
 	"time"
 
 	"github.com/sirupsen/logrus"

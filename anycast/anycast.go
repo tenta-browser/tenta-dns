@@ -24,12 +24,12 @@ package anycast
 
 import (
 	"fmt"
+	"github.com/tenta-browser/tenta-dns/common"
+	"github.com/tenta-browser/tenta-dns/log"
 	"net"
 	"strconv"
 	"strings"
 	"sync"
-	"github.com/tenta-browser/tenta-dns/common"
-	"github.com/tenta-browser/tenta-dns/log"
 	"time"
 
 	api "github.com/osrg/gobgp/api"

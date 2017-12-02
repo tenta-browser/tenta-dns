@@ -24,10 +24,10 @@ package http_handlers
 
 import (
 	"fmt"
-	"net/http"
 	"github.com/tenta-browser/tenta-dns/common"
 	"github.com/tenta-browser/tenta-dns/responder/randomizer"
 	"github.com/tenta-browser/tenta-dns/runtime"
+	"net/http"
 
 	"github.com/sirupsen/logrus"
 )

@@ -24,10 +24,10 @@ package netinterface
 
 import (
 	"fmt"
-	"net"
-	"sync"
 	"github.com/tenta-browser/tenta-dns/common"
 	"github.com/tenta-browser/tenta-dns/log"
+	"net"
+	"sync"
 	"time"
 
 	"github.com/sirupsen/logrus"

@@ -26,11 +26,11 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"github.com/tenta-browser/tenta-dns/common"
+	"github.com/tenta-browser/tenta-dns/runtime"
 	"net"
 	"regexp"
 	"strconv"
-	"github.com/tenta-browser/tenta-dns/common"
-	"github.com/tenta-browser/tenta-dns/runtime"
 	"time"
 
 	"github.com/tenta-browser/tenta-dns/log"

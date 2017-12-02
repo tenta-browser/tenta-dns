@@ -25,14 +25,14 @@ package runtime
 import (
 	"errors"
 	"fmt"
-	"io/ioutil"
-	"os"
-	"path/filepath"
-	"regexp"
 	"github.com/tenta-browser/tenta-dns/anycast"
 	"github.com/tenta-browser/tenta-dns/common"
 	"github.com/tenta-browser/tenta-dns/log"
 	"github.com/tenta-browser/tenta-dns/zones"
+	"io/ioutil"
+	"os"
+	"path/filepath"
+	"regexp"
 
 	"github.com/BurntSushi/toml"
 	"github.com/sirupsen/logrus"

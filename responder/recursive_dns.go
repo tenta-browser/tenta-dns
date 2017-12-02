@@ -28,6 +28,8 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	nlog "github.com/tenta-browser/tenta-dns/log"
+	"github.com/tenta-browser/tenta-dns/runtime"
 	"log"
 	"math/rand"
 	"net"
@@ -35,8 +37,6 @@ import (
 	"reflect"
 	"runtime/debug"
 	"strings"
-	nlog "github.com/tenta-browser/tenta-dns/log"
-	"github.com/tenta-browser/tenta-dns/runtime"
 	"time"
 
 	"github.com/miekg/dns"

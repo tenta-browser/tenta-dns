@@ -1,11 +1,11 @@
 package zones
 
 import (
+	"github.com/tenta-browser/tenta-dns/log"
 	"io/ioutil"
 	"os"
 	"path/filepath"
 	"regexp"
-	"github.com/tenta-browser/tenta-dns/log"
 
 	"github.com/miekg/dns"
 )

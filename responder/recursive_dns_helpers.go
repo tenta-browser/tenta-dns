@@ -10,7 +10,7 @@ func refuseAny(w dns.ResponseWriter, r *dns.Msg, rt *runtime.Runtime) {
 	rt.Stats.Tick("resolver", "refuse-any")
 	hinfo := &dns.HINFO{
 		Cpu: "ANY obsolete",
-		Os: "See draft-ietf-dnsop-refuse-any",
+		Os:  "See draft-ietf-dnsop-refuse-any",
 	}
 	msg := new(dns.Msg)
 	msg.SetReply(r)

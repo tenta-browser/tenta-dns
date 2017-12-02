@@ -24,9 +24,9 @@ package runtime
 
 import (
 	"encoding/binary"
+	"github.com/tenta-browser/tenta-dns/log"
 	"os"
 	"sync"
-	"github.com/tenta-browser/tenta-dns/log"
 	"time"
 
 	"github.com/sirupsen/logrus"

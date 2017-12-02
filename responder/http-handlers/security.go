@@ -27,11 +27,11 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"github.com/tenta-browser/tenta-dns/runtime"
 	"net"
 	"net/http"
 	"net/url"
 	"strconv"
-	"github.com/tenta-browser/tenta-dns/runtime"
 	"time"
 )
 

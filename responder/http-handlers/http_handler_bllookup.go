@@ -24,11 +24,11 @@ package http_handlers
 
 import (
 	"fmt"
-	"net"
-	"net/http"
 	"github.com/tenta-browser/tenta-dns/common"
 	"github.com/tenta-browser/tenta-dns/responder/blacklist"
 	"github.com/tenta-browser/tenta-dns/runtime"
+	"net"
+	"net/http"
 
 	"github.com/gorilla/mux"
 	"github.com/sirupsen/logrus"

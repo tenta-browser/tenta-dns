@@ -24,10 +24,10 @@ package common
 
 import (
 	"crypto/rand"
+	"github.com/tenta-browser/tenta-dns/log"
 	"math/big"
 	"net"
 	"os"
-	"github.com/tenta-browser/tenta-dns/log"
 )
 
 func AddSuffix(start []byte, suffix string) []byte {

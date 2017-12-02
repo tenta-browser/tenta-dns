@@ -27,11 +27,11 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"io"
-	"os"
 	"github.com/tenta-browser/tenta-dns/common"
 	"github.com/tenta-browser/tenta-dns/log"
 	"github.com/tenta-browser/tenta-dns/runtime"
+	"io"
+	"os"
 	"unicode"
 
 	"github.com/leonelquinteros/gorand"
