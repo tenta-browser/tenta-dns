@@ -19,9 +19,7 @@
 #
 # build.sh: *nix/Mac build wrapper
 
-GOPATH=`pwd`
-
-echo "Compiling to $GOPATH/bin"
+echo "Compiling to GOPATH/bin"
 
 version="development`date -u +.%Y%m%d.%H%M%S`"
 if [ -n "$BUILD_ID" ]; then

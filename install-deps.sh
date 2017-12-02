@@ -20,7 +20,7 @@
 #
 # install-deps.sh: Install libs on *nix / Mac
 
-GOPATH=`pwd`
+echo "Installing dependencies to GOPATH/pkg"
 
 echo "Installing dependencies to $GOPATH/pkg"
 
