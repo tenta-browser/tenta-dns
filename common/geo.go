@@ -23,17 +23,17 @@
 package common
 
 type ISP struct {
-	Organization   string `maxminddb:"organization"json:"organization"`
-	ASNumber       uint   `maxminddb:"autonomous_system_number"json:"as_number"`
-	ASOrganization string `maxminddb:"autonomous_system_organization"json:"as_owner"`
-	ISP            string `maxminddb:"isp"json:"isp"`
+	Organization   string `maxminddb:"organization" json:"organization"`
+	ASNumber       uint   `maxminddb:"autonomous_system_number" json:"as_number"`
+	ASOrganization string `maxminddb:"autonomous_system_organization" json:"as_owner"`
+	ISP            string `maxminddb:"isp" json:"isp"`
 }
 
 type Position struct {
-	Latitude  float32 `maxminddb:"latitude"json:"latitude"`
-	Longitude float32 `maxminddb:"longitude"json:"longitude"`
-	Radius    uint    `maxminddb:"accuracy_radius"json:"uncertainty_km"`
-	TimeZone  string  `maxminddb:"time_zone"json:"time_zone"`
+	Latitude  float32 `maxminddb:"latitude" json:"latitude"`
+	Longitude float32 `maxminddb:"longitude" json:"longitude"`
+	Radius    uint    `maxminddb:"accuracy_radius" json:"uncertainty_km"`
+	TimeZone  string  `maxminddb:"time_zone" json:"time_zone"`
 }
 
 type GeoLocation struct {
