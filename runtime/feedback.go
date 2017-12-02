@@ -25,10 +25,10 @@ package runtime
 import (
 	"bytes"
 	"fmt"
+	"github.com/tenta-browser/tenta-dns/log"
 	"net/http"
 	"net/url"
 	"sync"
-	"github.com/tenta-browser/tenta-dns/log"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -56,8 +56,8 @@ func (p *Payload) ShortEncode(op string) []byte {
 	return []byte("payload=" + url.QueryEscape(fmt.Sprintf("{\"text\":\"%s failed to resolve domain `%s`\n`%s`\"}", op, p.dom, p.err)))
 }
 
-func (p *Payload) LongEncode() []byte {
-	return []byte("payload=" + url.QueryEscape(fmt.Sprintf("{\"text\":\"Operator `%s` failed to resolve domain `%s`\n`%s`\n%s\"}", p.dom, p.err, p.stack)))
+func (p *Payload) LongEncode(op string) []byte {
+	return []byte("payload=" + url.QueryEscape(fmt.Sprintf("{\"text\":\"Operator `%s` failed to resolve domain `%s`\n`%s`\n%s\"}", op, p.dom, p.err, p.stack)))
 }
 
 func NewPayload(operator, dom, err, stack string) *Payload {
