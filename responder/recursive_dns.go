@@ -28,8 +28,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
-	nlog "github.com/tenta-browser/tenta-dns/log"
-	"github.com/tenta-browser/tenta-dns/runtime"
 	"log"
 	"math/rand"
 	"net"
@@ -38,6 +36,9 @@ import (
 	"runtime/debug"
 	"strings"
 	"time"
+
+	nlog "github.com/tenta-browser/tenta-dns/log"
+	"github.com/tenta-browser/tenta-dns/runtime"
 
 	"github.com/miekg/dns"
 	"github.com/muesli/cache2go"
@@ -1367,14 +1368,14 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 					} else if resolveTechnique == resolveMethodRecursive {
 						/// we have a NS record without glue, so we go ahead and take the time to resolve it
 						/// because there are surprisingly many cases in which one NS has A record, and it times out often (logically)
-						q.debug("\n\n\nLAUNCHING PEDANTIC INTERMEDIARY RESOLVE FOR [%s]\n\n\n", ns.Ns)
-						qIntermediary := newQueryParam(ns.Ns, dns.TypeA, q.ilog, q.elog, q.provider, q.rt)
-						additional, e = qIntermediary.doResolve(resolveMethodRecursiveNonPedantic)
-						if e != nil {
-							q.debug("Cannot resolve intermediary NS [%s]\n", ns.Ns)
-						} else {
-							q.debug("Intermediary resolve successful!!")
-						}
+						// q.debug("\n\n\nLAUNCHING PEDANTIC INTERMEDIARY RESOLVE FOR [%s]\n\n\n", ns.Ns)
+						// qIntermediary := newQueryParam(ns.Ns, dns.TypeA, q.ilog, q.elog, q.provider, q.rt)
+						// additional, e = qIntermediary.doResolve(resolveMethodRecursiveNonPedantic)
+						// if e != nil {
+						// 	q.debug("Cannot resolve intermediary NS [%s]\n", ns.Ns)
+						// } else {
+						// 	q.debug("Intermediary resolve successful!!")
+						// }
 					}
 
 					/// if this is the last step in loop, and NS type records are sought, this is the answer.
