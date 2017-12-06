@@ -804,16 +804,25 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16, sugges
 	currentLevel := ""
 	for q.chainOfTrustIntact && subject != dns.TypeDNSKEY {
 		currentLevel = inferCurrentLevel(object, subject)
+		dsr := new(dns.Msg)
+		cachedKeys := false
 		/// root zone is level 1
-		q.debug("performing dnssec query. for level [%s]\n", currentLevel)
-		dsr, _, e := q.simpleResolve(currentLevel, target, dns.TypeDNSKEY, 0)
-		//q.debug("DNSSEC query:\n%s\n", dsr.String())
-		if e != nil {
-			if forgivingDNSSECCheck {
-				q.chainOfTrustIntact = false
-				break
+		q.debug("Looking for DNSKEY in the cache.\n")
+		cDNSKEYs, _, e := q.retrieveCache(q.provider, currentLevel, dns.TypeDNSKEY)
+		if len(cDNSKEYs) == 0 {
+			q.debug("Cache miss for DNSKEYs. Performing dnssec query for level [%s]\n", currentLevel)
+			dsr, _, e = q.simpleResolve(currentLevel, target, dns.TypeDNSKEY, 0)
+			//q.debug("DNSSEC query:\n%s\n", dsr.String())
+			if e != nil {
+				if forgivingDNSSECCheck {
+					q.chainOfTrustIntact = false
+					break
+				}
+				return nil, 0, newError(errorCannotResolve, severityFatal, "failed for dnskeys. [%s]", e.String())
 			}
-			return nil, 0, newError(errorCannotResolve, severityFatal, "failed for dnskeys. [%s]", e.String())
+		} else {
+			dsr.Answer = cDNSKEYs
+			cachedKeys = true
 		}
 
 		if !q.chainOfTrustIntact {
@@ -897,16 +906,19 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16, sugges
 			}
 			return nil, 0, newError(errorCacheWriteError, severityMajor, "cannot save DNSKEY in cache [%s]", e.String())
 		}
-		/// next up is: validating current DNSKEY records via RRSIG
-		if e := q.validateSignatures(k, dsr); e != nil {
-			// if forgivingDNSSECCheck {
-			// 	q.setChainOfTrust(false)
-			// 	break
-			// }
-			q.setChainOfTrust(false)
-			return nil, 0, newError(errorDNSSECBogus, severityFatal, "bogus dnssec response [%s]", e)
+		/// next up is: validating current DNSKEY records via RRSIG (if obtained from querying)
+		if !cachedKeys {
+			if e := q.validateSignatures(k, dsr); e != nil {
+				// if forgivingDNSSECCheck {
+				// 	q.setChainOfTrust(false)
+				// 	break
+				// }
+				q.setChainOfTrust(false)
+				return nil, 0, newError(errorDNSSECBogus, severityFatal, "bogus dnssec response [%s]", e)
+			}
+		} else {
+			q.debug("Not validating cached keys.\n")
 		}
-
 		/// if it's broken, but no error is returned
 		if q.chainOfTrustIntact == false {
 			break
