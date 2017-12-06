@@ -3,15 +3,46 @@ package responder
 import (
 	"encoding/xml"
 	"fmt"
-	"github.com/tenta-browser/tenta-dns/log"
-	"github.com/tenta-browser/tenta-dns/runtime"
 	"io/ioutil"
 	"net/http"
 	"strings"
+	"time"
+
+	"github.com/tenta-browser/tenta-dns/log"
+	"github.com/tenta-browser/tenta-dns/runtime"
 
 	"github.com/miekg/dns"
 	"github.com/sirupsen/logrus"
 )
+
+type ExchangeHistoryItem struct {
+	duration                                               time.Duration
+	targetIP, targetName, querySubject, queryObject, notes string
+}
+
+type ExchangeHistory []*ExchangeHistoryItem
+
+func newExchangeHistoryItem(duration time.Duration, targetIP, targetName, querySubject, queryObject, notes string) *ExchangeHistoryItem {
+	return &ExchangeHistoryItem{duration, targetIP, targetName, querySubject, queryObject, notes}
+}
+
+func (h *ExchangeHistory) Add(i *ExchangeHistoryItem) {
+	*h = append(*h, i)
+}
+
+func (h ExchangeHistory) String() (s string) {
+	d := time.Duration(0)
+	for _, i := range h {
+		d += i.duration
+		s += fmt.Sprintf("\t[%v][%s[%s]][%s/%s]", i.duration, i.targetIP, i.targetName, i.queryObject, i.querySubject)
+		if i.notes != "" {
+			s += " - " + i.notes
+		}
+		s += "\n"
+	}
+	s += fmt.Sprintf("TOTAL:\t[%v]", d)
+	return
+}
 
 // Deep equality check for DS records
 func equalsDS(a, b *dns.DS) bool {
@@ -55,7 +86,7 @@ func getTrustedRootAnchors(l *logrus.Entry, provider string, rt *runtime.Runtime
 		}
 
 	} else if provider == "opennic" {
-		q := newQueryParam(".", dns.TypeDNSKEY, l, new(log.EventualLogger), provider, rt)
+		q := newQueryParam(".", dns.TypeDNSKEY, l, new(log.EventualLogger), provider, rt, new(ExchangeHistory))
 		krr, e := q.doResolve(resolveMethodFinalQuestion)
 		if e != nil {
 			return fmt.Errorf("Cannot get opennic root keys. [%s]", e.Error())

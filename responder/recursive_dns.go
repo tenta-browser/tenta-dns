@@ -157,6 +157,7 @@ type queryParam struct {
 	provider              string
 	authority, additional *[]dns.RR
 	rt                    *runtime.Runtime
+	exchangeHistory       *ExchangeHistory
 }
 
 /// 2 structs to help parse xml response from iana -- root zone trust anchor
@@ -174,7 +175,7 @@ type resultData struct {
 }
 
 func (q *queryParam) newContinationParam(rangeLimit int, serverHint string) *queryParam {
-	return &queryParam{q.vanilla, q.tokens, q.record, 0, true, rangeLimit, serverHint, q.CDFlagSet, nil, q.history, q.logBuffer, 0, q.chainOfTrustIntact, q, q.ilog, q.elog, q.provider, q.authority, q.additional, q.rt}
+	return &queryParam{q.vanilla, q.tokens, q.record, 0, true, rangeLimit, serverHint, q.CDFlagSet, nil, q.history, q.logBuffer, 0, q.chainOfTrustIntact, q, q.ilog, q.elog, q.provider, q.authority, q.additional, q.rt, q.exchangeHistory}
 }
 
 /// fork-join scheme for lookup continuations
@@ -271,7 +272,7 @@ func (e *dnsError) String() string {
 
 /// assumes domain is valid (eg. tenta.io, asd.qwe.zxc.lol)
 /// dnssec is on by default
-func newQueryParam(vanilla string, record uint16, ilog *logrus.Entry, elog *nlog.EventualLogger, provider string, rt *runtime.Runtime) *queryParam {
+func newQueryParam(vanilla string, record uint16, ilog *logrus.Entry, elog *nlog.EventualLogger, provider string, rt *runtime.Runtime, h *ExchangeHistory) *queryParam {
 	if dns.IsFqdn(vanilla) {
 		vanilla = vanilla[:len(vanilla)-1]
 	}
@@ -280,7 +281,7 @@ func newQueryParam(vanilla string, record uint16, ilog *logrus.Entry, elog *nlog
 	for i := len(temp) - 1; i >= 0; i-- {
 		tokens[len(temp)-i-1] = strings.Join(temp[i:len(temp)], ".") + "."
 	}
-	return &queryParam{dns.Fqdn(vanilla), tokens, record, 0, false, 0, "", false, nil, make([]historyItem, 0), new(bytes.Buffer), 0, true, nil, ilog, elog, provider, new([]dns.RR), new([]dns.RR), rt}
+	return &queryParam{dns.Fqdn(vanilla), tokens, record, 0, false, 0, "", false, nil, make([]historyItem, 0), new(bytes.Buffer), 0, true, nil, ilog, elog, provider, new([]dns.RR), new([]dns.RR), rt, h}
 }
 
 /// define it here for short term clarity
@@ -952,6 +953,7 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16, sugges
 	reply, rtt, err := client.Exchange(message, target+port)
 	q.debug("Question was [%s]\nNet stats: [%s][%s]\n", message.Question[0].String(), target+port, client.Net)
 	q.debug(">>> Query response <<<\n%s\n", reply.String())
+	q.exchangeHistory.Add(newExchangeHistoryItem(rtt, target, "", dns.TypeToString[subject], object, ""))
 
 	/// some cases partial support for EDNS0 can yield a FORMERR to EDNS queries
 	/// wiping EDNS0 OPTS from ADDITIONAL section
@@ -1339,11 +1341,11 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 
 			for _, rr := range recordHolder {
 				/// first of all validate RR
-				if !contextIndependentValidateRR(rr, token) {
-					/// entry point for ns blacklisting (TODO)
-					q.debug("Found malicious RR [%s]. Skipping.\n", rr.String())
-					continue
-				}
+				// if !contextIndependentValidateRR(rr, token) {
+				// 	/// entry point for ns blacklisting (TODO)
+				// 	q.debug("Found malicious RR [%s]. Skipping.\n", rr.String())
+				// 	continue
+				// }
 				if ds, ok := rr.(*dns.DS); ok {
 					q.debug("Found DS records")
 					hasDSRecord = true
@@ -1532,7 +1534,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 
 								if len(cnameSlice) > 0 {
 									finalTarget := untangleCNAMEindirections(token, cnameSlice)
-									soaDerefCont := newQueryParam(finalTarget.Target, q.record, q.ilog, q.elog, q.provider, q.rt)
+									soaDerefCont := newQueryParam(finalTarget.Target, q.record, q.ilog, q.elog, q.provider, q.rt, q.exchangeHistory)
 									soaDerefRes, err := soaDerefCont.doResolve(resolveMethodRecursive)
 									q.logBuffer.Write(soaDerefCont.logBuffer.Bytes())
 									q.timeWasted += soaDerefCont.timeWasted
@@ -1603,7 +1605,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 				q.timeWasted += tw
 				/// this is not cool, we'll have to resolve the canonical name to get a usable ip address
 				q.debug("Going further down the rabbithole, via CNAME redirection [%s]\n", cname.Target)
-				newq := newQueryParam(cname.Target, q.record, q.ilog, q.elog, q.provider, q.rt)
+				newq := newQueryParam(cname.Target, q.record, q.ilog, q.elog, q.provider, q.rt, q.exchangeHistory)
 				cnameDereference, err := newq.doResolve(resolveMethodRecursive)
 				q.logBuffer.Write(newq.logBuffer.Bytes())
 				/// this is an aggregated check for no error, and no nxdomain (et al)
@@ -1704,7 +1706,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 					if tHost != "" {
 						q.debug("Trying to resolve eluding host. Launching sub-resolve for [%s]\n\n", tHost)
 						/// resolve meaning A record, to be used further
-						newq := newQueryParam(tHost, dns.TypeA, q.ilog, q.elog, q.provider, q.rt)
+						newq := newQueryParam(tHost, dns.TypeA, q.ilog, q.elog, q.provider, q.rt, q.exchangeHistory)
 						_targetServer, err := newq.doResolve(resolveMethodRecursive)
 						q.logBuffer.Write(newq.logBuffer.Bytes())
 						if err != nil {
@@ -1840,7 +1842,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 	if len(finalCnames) > 0 && q.record != dns.TypeCNAME {
 		q.debug("Final query CNAME caught, and handled.\n")
 		lastCNAME := untangleCNAMEindirections(q.vanilla, finalCnames)
-		qfinal := newQueryParam(lastCNAME.Target, q.record, q.ilog, q.elog, q.provider, q.rt)
+		qfinal := newQueryParam(lastCNAME.Target, q.record, q.ilog, q.elog, q.provider, q.rt, q.exchangeHistory)
 		//qfinal.addToResultSet(finalCnameRR)
 		res, err := qfinal.doResolve(resolveMethodRecursive)
 		q.logBuffer.Write(qfinal.logBuffer.Bytes())
@@ -1916,7 +1918,7 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 		l = l.WithField("domain", r.Question[0].Name)
 		elogger := new(nlog.EventualLogger)
 		elogger.Queuef("%v -- STARTING NEW TOPLEVEL RESOLVE FOR [%s][RecDesired - %v]", time.Now(), r.Question[0].Name, r.RecursionDesired)
-		qp := newQueryParam(r.Question[0].Name, r.Question[0].Qtype, l, elogger, provider, rt)
+		qp := newQueryParam(r.Question[0].Name, r.Question[0].Qtype, l, elogger, provider, rt, new(ExchangeHistory))
 		qp.CDFlagSet = r.CheckingDisabled
 		resolveMethodToUse := resolveMethodRecursive
 		if r.RecursionDesired == false {
