@@ -1446,6 +1446,8 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 				} else if cname, ok := rr.(*dns.CNAME); ok {
 					foundCNAMEs = append(foundCNAMEs, cname)
 					hasCNAMERecord = true
+					tw, _ = q.storeCache(q.provider, cname.Header().Name, []dns.RR{cname})
+					q.timeWasted += tw
 				} else if soa, ok := rr.(*dns.SOA); ok {
 					/// check SOA answer, and check if the name in the record match the name in the question
 					/// if so we add one token to the group, and retry same server (as it advertised itself as authority over the zone)
@@ -1615,8 +1617,6 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 
 				/// if partial dereference isn't working, let's try partial
 				hasCNAMERecord = true
-				tw, _ = q.storeCache(q.provider, cname.Header().Name, []dns.RR{cname})
-				q.timeWasted += tw
 				/// this is not cool, we'll have to resolve the canonical name to get a usable ip address
 				q.debug("Going further down the rabbithole, via CNAME redirection [%s]\n", cname.Target)
 				newq := newQueryParam(cname.Target, q.record, q.ilog, q.elog, q.provider, q.rt, q.exchangeHistory)
