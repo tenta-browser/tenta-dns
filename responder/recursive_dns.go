@@ -431,13 +431,15 @@ func (q *queryParam) retrieveCache(provider, domain string, recordType uint16) (
 			if err != nil {
 				return
 			}
+			inCacheDuration := uint32(time.Now().Sub(data.CreatedOn()).Seconds())
+			rr.Header().Ttl -= inCacheDuration
+			if rr.Header().Ttl < 0 {
+				return
+			}
 			/// if record is of desired type, let's put it in the result slice
 			/// amended to return saved RRSIG records for the target record
 			if rr.Header().Rrtype == recordType || (q.CDFlagSet && rr.Header().Rrtype == dns.TypeRRSIG && rr.(*dns.RRSIG).TypeCovered == recordType) {
 				q.debug("[CACHE RET] :: [%s]\n", rr.String())
-				inCacheDuration := uint32(time.Now().Sub(data.CreatedOn()).Seconds())
-				//q.debug("Adjusting TTL [%d] - [%f][%d]\n", rr.Header().Ttl, data.LifeSpan().Seconds(), uint32(data.LifeSpan().Seconds()))
-				rr.Header().Ttl -= inCacheDuration
 				retrr = append(retrr, rr)
 			}
 			/// follow through CNAME redirection, unless of course CNAME is whate we're looking for
