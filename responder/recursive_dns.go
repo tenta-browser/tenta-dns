@@ -1734,9 +1734,16 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 							q.debug("Sub-Resolve FAIL >>>[%s]\n\n", tHost)
 							continue
 						}
-						targetServer = _targetServer[0].(*dns.A).A.String()
-						if len(_targetServer) > 1 {
-							populateFallbackServers(targetServer, &fallbackServers, _targetServer[1:])
+						for _, ts := range _targetServer {
+							targetServerA, ok := ts.(*dns.A)
+							if !ok {
+								continue
+							}
+							if targetServer == "" {
+								targetServer = targetServerA.A.String()
+							} else {
+								insertFallbackServer(targetServer, &fallbackServers, targetServerA)
+							}
 						}
 						q.debug("Sub-Resolve end >>>[%s]\n\n", tHost)
 						q.timeWasted += newq.timeWasted
