@@ -1616,30 +1616,28 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 						defer qcname.join()
 						return cnameCont, err
 					}
-
+				} else {
+					/// if partial dereference isn't working, let's try partial
+					hasCNAMERecord = true
+					/// this is not cool, we'll have to resolve the canonical name to get a usable ip address
+					q.debug("Going further down the rabbithole, via CNAME redirection [%s]\n", cname.Target)
+					newq := newQueryParam(cname.Target, q.record, q.ilog, q.elog, q.provider, q.rt, q.exchangeHistory)
+					cnameDereference, err := newq.doResolve(resolveMethodRecursive)
+					q.logBuffer.Write(newq.logBuffer.Bytes())
+					/// this is an aggregated check for no error, and no nxdomain (et al)
+					/// but as it turns out (obviously) it is customary to CNAME over partial domains too, so that needs checking too
+					/// let's handle error separately, if unresolvable, just continue to the next rr
+					/// let's save the CNAME into the result slice
+					rrSlice := make([]dns.RR, len(foundCNAMEs))
+					for i := range foundCNAMEs {
+						rrSlice[i] = foundCNAMEs[i]
+					}
+					if cnameDereference != nil {
+						cnameDereference = append(cnameDereference, rrSlice...)
+					}
+					q.timeWasted += newq.timeWasted
+					return cnameDereference, err
 				}
-
-				/// if partial dereference isn't working, let's try partial
-				hasCNAMERecord = true
-				/// this is not cool, we'll have to resolve the canonical name to get a usable ip address
-				q.debug("Going further down the rabbithole, via CNAME redirection [%s]\n", cname.Target)
-				newq := newQueryParam(cname.Target, q.record, q.ilog, q.elog, q.provider, q.rt, q.exchangeHistory)
-				cnameDereference, err := newq.doResolve(resolveMethodRecursive)
-				q.logBuffer.Write(newq.logBuffer.Bytes())
-				/// this is an aggregated check for no error, and no nxdomain (et al)
-				/// but as it turns out (obviously) it is customary to CNAME over partial domains too, so that needs checking too
-				/// let's handle error separately, if unresolvable, just continue to the next rr
-				/// let's save the CNAME into the result slice
-				rrSlice := make([]dns.RR, len(foundCNAMEs))
-				for i := range foundCNAMEs {
-					rrSlice[i] = foundCNAMEs[i]
-				}
-				if cnameDereference != nil {
-					cnameDereference = append(cnameDereference, rrSlice...)
-				}
-				q.timeWasted += newq.timeWasted
-				return cnameDereference, err
-
 			}
 
 			/// unfortunately answer/authority/additional combo could not lead directly to a next step IP
