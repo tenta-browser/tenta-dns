@@ -446,7 +446,7 @@ func (q *queryParam) retrieveCache(provider, domain string, recordType uint16) (
 			/// but in order for the client to understand the final result, add the CNAME iself to the result set
 			if rr.Header().Rrtype == dns.TypeCNAME && recordType != dns.TypeCNAME {
 				q.debug("Doing the cname dereference. [%s]->[%s]\n", domain, rr.(*dns.CNAME).Target)
-				retrr := append(retrr, rr)
+				retrr = append(retrr, rr)
 				derefRR, tdur, er := q.retrieveCache(provider, rr.(*dns.CNAME).Target, recordType)
 				retDuration += tdur
 				if er == nil {
