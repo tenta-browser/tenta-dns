@@ -1176,7 +1176,11 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 			continue
 		}
 		q.debug("Found NS record.")
-		ns := rr[0].(*dns.NS)
+
+		ns, ok := rr[0].(*dns.NS)
+		if !ok {
+			continue
+		}
 		rr2, tw, err := q.retrieveCache(q.provider, ns.Ns, dns.TypeA)
 		q.timeWasted += tw
 		if err != nil {
