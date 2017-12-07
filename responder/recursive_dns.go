@@ -1220,8 +1220,12 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 				nsrr, tw, _ := q.retrieveCache(q.provider, token, dns.TypeNS)
 				q.timeWasted += tw
 
-				if nsrr != nil {
-					arr, tw, _ := q.retrieveCache(q.provider, nsrr[0].(*dns.NS).Ns, dns.TypeA)
+				for _, nsItem := range nsrr {
+					ns, ok := nsItem.(*dns.NS)
+					if !ok {
+						continue
+					}
+					arr, tw, _ := q.retrieveCache(q.provider, ns.Ns, dns.TypeA)
 					q.timeWasted += tw
 					if arr != nil {
 						q.debug("Skipping step due to already cached value for [%s] -> [%s]\n", token, arr[0].(dns.RR).String())
@@ -1229,7 +1233,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 						if len(arr) > 1 {
 							populateFallbackServers(targetServer, &fallbackServers, arr[1:])
 						}
-						continue
+						break
 					}
 				}
 			} else { /// target record type otherwise
