@@ -1158,8 +1158,28 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 	q.timeWasted += tw
 	if err == nil {
 		//return rr.(*dns.A).A.String(), nil
-		q.debug("Cache HIT. Returning solution. [%v]")
-		return rr, nil
+		q.debug("Found _something_ in cache. Checking whether it's a full answer.\n")
+		hasTargetRecord := false
+		cnames := []*dns.CNAME{}
+		for _, cachedRecord := range rr {
+			rtype := cachedRecord.Header().Rrtype
+			if rtype == q.record {
+				hasTargetRecord = true
+				break
+			} else if rtype == dns.TypeCNAME {
+				cnames = append(cnames, cachedRecord.(*dns.CNAME))
+			}
+		}
+		if hasTargetRecord {
+			q.debug("Cache HIT. Returning solution. [%v]\n", rr)
+			return rr, nil
+		} else {
+			q.debug("Using last CNAME and launching a new resolve form there.\n")
+			lastCname := untangleCNAMEindirections(q.vanilla, cnames)
+			qCacheCNAME := newQueryParam(lastCname.Target, q.record, q.ilog, q.elog, q.provider, q.rt, q.exchangeHistory)
+			qCacheCNAME.addToResultSet(rr)
+			return qCacheCNAME.doResolve(resolveTechnique)
+		}
 	} else if resolveTechnique == resolveMethodCacheOnly {
 		q.debug("Cache miss, and requested cache response only. Returning failure.")
 		return nil, err
