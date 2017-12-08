@@ -419,10 +419,6 @@ func (q *queryParam) retrieveCache(provider, domain string, recordType uint16) (
 		allTrue := true
 		cacheTab.Foreach(func(key interface{}, data *cache2go.CacheItem) {
 			rrString, ok := key.(string)
-			if data.Data() != nil && data.Data().(bool) == false {
-				allTrue = false
-			}
-
 			if !ok {
 				/// error. handle it.
 				return
@@ -435,6 +431,9 @@ func (q *queryParam) retrieveCache(provider, domain string, recordType uint16) (
 			rr.Header().Ttl -= inCacheDuration
 			if rr.Header().Ttl < 0 {
 				return
+			}
+			if data.Data() != nil && data.Data().(bool) == false {
+				allTrue = false
 			}
 			/// if record is of desired type, let's put it in the result slice
 			/// amended to return saved RRSIG records for the target record
@@ -860,7 +859,7 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16, sugges
 		}
 
 		/// break chain if composition of reply doesn't match expectations
-		if len(k) == 0 || len(r) == 0 {
+		if len(k) == 0 || (len(r) == 0 && !cachedKeys) {
 			q.setChainOfTrust(false)
 			q.debug("Breaking chain of trust since either keys or rrsigs are missing!\n")
 			break
@@ -1226,7 +1225,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 			if i != len(q.tokens)-1 {
 				nsrr, tw, _ := q.retrieveCache(q.provider, token, dns.TypeNS)
 				q.timeWasted += tw
-
+				shouldSkipCycle := false
 				for _, nsItem := range nsrr {
 					ns, ok := nsItem.(*dns.NS)
 					if !ok {
@@ -1240,8 +1239,12 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 						if len(arr) > 1 {
 							populateFallbackServers(targetServer, &fallbackServers, arr[1:])
 						}
+						shouldSkipCycle = true
 						break
 					}
+				}
+				if shouldSkipCycle {
+					continue
 				}
 			} else { /// target record type otherwise
 				arr, tw, err := q.retrieveCache(q.provider, token, q.record)
