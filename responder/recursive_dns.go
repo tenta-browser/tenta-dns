@@ -1470,127 +1470,134 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 					/// check SOA answer, and check if the name in the record match the name in the question
 					/// if so we add one token to the group, and retry same server (as it advertised itself as authority over the zone)
 					hasSOARecord = true
-					/// experience shows that this trick works for SOA replies other than nxdomain too, so cautiously will remove the if
-					//if reply.MsgHdr.Rcode == dns.RcodeNameError {
-					/// read: this is not the final form of the domain that is being queried
+					/// handling this case isolated:
+					/// target domain NS query results in CNAME + NXDOMAIN (+SOA)
+					/// handle: add soa to cache, break out of nxdomain handler
+					if hasCNAMERecord && reply.MsgHdr.Rcode == dns.RcodeNameError {
+						q.storeCache(q.provider, soa.Hdr.Name, []dns.RR{soa})
+					} else {
+						/// experience shows that this trick works for SOA replies other than nxdomain too, so cautiously will remove the if
+						//if reply.MsgHdr.Rcode == dns.RcodeNameError {
+						/// read: this is not the final form of the domain that is being queried
 
-					/// okay, so, NXDOMAIN for the full domain, this unequivocally means that the domain is unresolvable
-					if token == q.vanilla && reply.MsgHdr.Rcode == dns.RcodeNameError {
-						/// entry point for negative caching!!! (todo)
-						q.debug("Explicit nxdomain found, for full query string. returning immediately.")
-						/// transferring this here SOA to the result set
-						*q.authority = []dns.RR{rr}
-						return nil, newError(errorUnresolvable, severitySuccess, "domain [%s] is unresolvable", q.vanilla)
-					}
-					nxdomainOnFullString := false
-					q.storeCache(q.provider, soa.Hdr.Name, []dns.RR{soa})
-					if token != q.vanilla {
-						/// add negative cache entry as stated in soa record.
-						/// but as learned from 'search.files.bbci.co.uk' example SOA with NXDOMAIN can mean to try again with more tokens in the url for the same NS
-						/// this is a gamble (and it really is) so instead of setting the next iteration ip, we launch a separate resolve and check return for success/fail
-						/// but first check if this will lead to a loop
-						if q.vanilla == soa.Ns {
-							continue
+						/// okay, so, NXDOMAIN for the full domain, this unequivocally means that the domain is unresolvable
+						if token == q.vanilla && reply.MsgHdr.Rcode == dns.RcodeNameError {
+							/// entry point for negative caching!!! (todo)
+							q.debug("Explicit nxdomain found, for full query string. returning immediately.")
+							/// transferring this here SOA to the result set
+							*q.authority = []dns.RR{rr}
+							return nil, newError(errorUnresolvable, severitySuccess, "domain [%s] is unresolvable", q.vanilla)
 						}
-						q.debug("Trying a Hail Mary on the SOA NS\n")
-						/// do a continuation, or rather, try the full domain name on the same server
-						qc := q.newContinationParam(len(q.tokens)-1, oldTargetServer)
-						q.timeWasted += qc.timeWasted
-						shortcut, err := qc.doResolve(resolveMethodRecursive)
-						if err != nil {
-							q.debug("Hail Mary failed [%s]\n", err.String())
-							if err.errorCode == errorUnresolvable {
-								nxdomainOnFullString = true
-								*q.authority = *qc.authority
+						nxdomainOnFullString := false
+						q.storeCache(q.provider, soa.Hdr.Name, []dns.RR{soa})
+						if token != q.vanilla {
+							/// add negative cache entry as stated in soa record.
+							/// but as learned from 'search.files.bbci.co.uk' example SOA with NXDOMAIN can mean to try again with more tokens in the url for the same NS
+							/// this is a gamble (and it really is) so instead of setting the next iteration ip, we launch a separate resolve and check return for success/fail
+							/// but first check if this will lead to a loop
+							if q.vanilla == soa.Ns {
+								continue
 							}
-							//continue // as in take the next record from the reply in the big loop
-						} else {
-							defer qc.join()
-							q.debug("Tried the good old query-more-tokens-on-soa trick with success.")
-							return shortcut, nil
-						}
-					}
-					/// extend this condition with NXDOMAIN on full query string
-					if reply.MsgHdr.Rcode == dns.RcodeNameError || nxdomainOnFullString {
-						q.debug("Explicit nxdomain found, for partial query string. adding more tokens did not work. returning with NXDOMAIN.")
-						return nil, newError(errorUnresolvable, severitySuccess, "domain [%s] is unresolvable", q.vanilla)
-					}
-
-					/// this is the tricky part:
-					/// we queried for the full domain, and for a NS record
-					/// obviously, the NS said, yeah, i'm the guy you're looking for, and sends a SOA
-					/// but that should mean:
-					/// 1. reply has no error (aka NOERROR flag)
-					/// 2. query string is the full domain
-					/// but additionally, we need to check if NS or SOA records are the main queried types too
-					/// update: there are some cases in which the SOA.NS is an (yet unknown) alias of one of the nss governing the zone
-					/// this would mean, we can break out of the NS loop and try directly the final query from the last NS (this one right here)
-
-					if reply.MsgHdr.Rcode == dns.RcodeSuccess && token == q.vanilla {
-						if q.record == dns.TypeNS || q.record == dns.TypeSOA {
-							q.addToResultSet([]dns.RR{soa})
-						} else {
-							/// but before letting this one break out of the loop let's make sure that it's not a CNAME that's waiting at the end of the line
-							/// specifically interesting are the cases, when CNAME dereferences are not revealed by any other types of queries, just A
-							/// more interesting is the case when a CNAME record is not revealed for a CNAME query, just LITERALLY an A query (not even CNAME, yeah),
-							/// so the above code will be modified to do a last-step A query of the current target
-							q.debug("Trying to lure out a hidden CNAME. Stay tuned.\n")
-							soaCont := q.newContinationParam(i+1, oldTargetServer)
-							soaCont.record = dns.TypeA
-							soaCNAME, err := soaCont.doResolve(resolveMethodFinalQuestion)
-							q.timeWasted += soaCont.timeWasted
-							cnameSlice := make([]*dns.CNAME, 0)
-							addressSlice := make([]*dns.A, 0)
-							q.debug("Luring out ended.\n\n")
-							/// means it has no CNAME at the end
+							q.debug("Trying a Hail Mary on the SOA NS\n")
+							/// do a continuation, or rather, try the full domain name on the same server
+							qc := q.newContinationParam(len(q.tokens)-1, oldTargetServer)
+							q.timeWasted += qc.timeWasted
+							shortcut, err := qc.doResolve(resolveMethodRecursive)
 							if err != nil {
-								if err.errorCode == errorDNSSECBogus {
-									q.setChainOfTrust(false)
-									return nil, err
+								q.debug("Hail Mary failed [%s]\n", err.String())
+								if err.errorCode == errorUnresolvable {
+									nxdomainOnFullString = true
+									*q.authority = *qc.authority
 								}
-								targetServer = oldTargetServer
-								break
+								//continue // as in take the next record from the reply in the big loop
 							} else {
-								soaCont.join()
-								for _, cnr := range soaCNAME {
-									if cn, ok := cnr.(*dns.CNAME); ok {
-
-										cnameSlice = append(cnameSlice, cn)
-									}
-								}
-
-								for _, cnr := range soaCNAME {
-									if a, ok := cnr.(*dns.A); ok {
-
-										addressSlice = append(addressSlice, a)
-									}
-								}
-
-								if len(cnameSlice) > 0 {
-									finalTarget := untangleCNAMEindirections(token, cnameSlice)
-									soaDerefCont := newQueryParam(finalTarget.Target, q.record, q.ilog, q.elog, q.provider, q.rt, q.exchangeHistory)
-									soaDerefRes, err := soaDerefCont.doResolve(resolveMethodRecursive)
-									q.logBuffer.Write(soaDerefCont.logBuffer.Bytes())
-									q.timeWasted += soaDerefCont.timeWasted
-									if err == nil {
-										soaDerefRes = append(soaDerefRes, soaCNAME...)
-									}
-									return soaDerefRes, err
-								} else if len(addressSlice) > 0 {
-
-									q.addToResultSet(soaCNAME)
-									//q.result = append(q.result, addressSlice...)
-									return q.result, nil
-								}
+								defer qc.join()
+								q.debug("Tried the good old query-more-tokens-on-soa trick with success.")
+								return shortcut, nil
 							}
-							/// if we have only SOA in record holder and target server is still empty (and we already did an A on the same server), return that result set
-							if len(recordHolder) == 1 && targetServer == "" {
-								return soaCNAME, nil
-							}
-
 						}
-						targetHost = append(targetHost, soa.Ns)
-						q.debug("SOA record's NS entry added as target host.\n [%s]\n", soa.Ns)
+						/// extend this condition with NXDOMAIN on full query string
+						if reply.MsgHdr.Rcode == dns.RcodeNameError || nxdomainOnFullString {
+							q.debug("Explicit nxdomain found, for partial query string. adding more tokens did not work. returning with NXDOMAIN.")
+							return nil, newError(errorUnresolvable, severitySuccess, "domain [%s] is unresolvable", q.vanilla)
+						}
+
+						/// this is the tricky part:
+						/// we queried for the full domain, and for a NS record
+						/// obviously, the NS said, yeah, i'm the guy you're looking for, and sends a SOA
+						/// but that should mean:
+						/// 1. reply has no error (aka NOERROR flag)
+						/// 2. query string is the full domain
+						/// but additionally, we need to check if NS or SOA records are the main queried types too
+						/// update: there are some cases in which the SOA.NS is an (yet unknown) alias of one of the nss governing the zone
+						/// this would mean, we can break out of the NS loop and try directly the final query from the last NS (this one right here)
+
+						if reply.MsgHdr.Rcode == dns.RcodeSuccess && token == q.vanilla {
+							if q.record == dns.TypeNS || q.record == dns.TypeSOA {
+								q.addToResultSet([]dns.RR{soa})
+							} else {
+								/// but before letting this one break out of the loop let's make sure that it's not a CNAME that's waiting at the end of the line
+								/// specifically interesting are the cases, when CNAME dereferences are not revealed by any other types of queries, just A
+								/// more interesting is the case when a CNAME record is not revealed for a CNAME query, just LITERALLY an A query (not even CNAME, yeah),
+								/// so the above code will be modified to do a last-step A query of the current target
+								q.debug("Trying to lure out a hidden CNAME. Stay tuned.\n")
+								soaCont := q.newContinationParam(i+1, oldTargetServer)
+								soaCont.record = dns.TypeA
+								soaCNAME, err := soaCont.doResolve(resolveMethodFinalQuestion)
+								q.timeWasted += soaCont.timeWasted
+								cnameSlice := make([]*dns.CNAME, 0)
+								addressSlice := make([]*dns.A, 0)
+								q.debug("Luring out ended.\n\n")
+								/// means it has no CNAME at the end
+								if err != nil {
+									if err.errorCode == errorDNSSECBogus {
+										q.setChainOfTrust(false)
+										return nil, err
+									}
+									targetServer = oldTargetServer
+									break
+								} else {
+									soaCont.join()
+									for _, cnr := range soaCNAME {
+										if cn, ok := cnr.(*dns.CNAME); ok {
+
+											cnameSlice = append(cnameSlice, cn)
+										}
+									}
+
+									for _, cnr := range soaCNAME {
+										if a, ok := cnr.(*dns.A); ok {
+
+											addressSlice = append(addressSlice, a)
+										}
+									}
+
+									if len(cnameSlice) > 0 {
+										finalTarget := untangleCNAMEindirections(token, cnameSlice)
+										soaDerefCont := newQueryParam(finalTarget.Target, q.record, q.ilog, q.elog, q.provider, q.rt, q.exchangeHistory)
+										soaDerefRes, err := soaDerefCont.doResolve(resolveMethodRecursive)
+										q.logBuffer.Write(soaDerefCont.logBuffer.Bytes())
+										q.timeWasted += soaDerefCont.timeWasted
+										if err == nil {
+											soaDerefRes = append(soaDerefRes, soaCNAME...)
+										}
+										return soaDerefRes, err
+									} else if len(addressSlice) > 0 {
+
+										q.addToResultSet(soaCNAME)
+										//q.result = append(q.result, addressSlice...)
+										return q.result, nil
+									}
+								}
+								/// if we have only SOA in record holder and target server is still empty (and we already did an A on the same server), return that result set
+								if len(recordHolder) == 1 && targetServer == "" {
+									return soaCNAME, nil
+								}
+
+							}
+							targetHost = append(targetHost, soa.Ns)
+							q.debug("SOA record's NS entry added as target host.\n [%s]\n", soa.Ns)
+						}
 					}
 				}
 			}
