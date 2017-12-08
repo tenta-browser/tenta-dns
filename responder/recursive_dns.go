@@ -1177,29 +1177,36 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 		}
 		q.debug("Found NS record.")
 
-		ns, ok := rr[0].(*dns.NS)
-		if !ok {
+		nsCache := []*dns.NS{}
+		for _, nsItem := range rr {
+			if nsItemConv, ok := nsItem.(*dns.NS); !ok {
+				continue
+			} else {
+				nsCache = append(nsCache, nsItemConv)
+			}
+		}
+
+		if len(nsCache) == 0 {
 			continue
 		}
-		rr2, tw, err := q.retrieveCache(q.provider, ns.Ns, dns.TypeA)
-		q.timeWasted += tw
-		if err != nil {
-			/// error checking here (this means real error)
-			continue
-		}
-		a := rr2[0].(*dns.A)
-		targetServer = a.A.String()
-		for _, nsRR := range rr[1:] {
-			rr2, tw, err = q.retrieveCache(q.provider, nsRR.(*dns.NS).Ns, dns.TypeA)
+
+		for _, ns := range nsCache {
+			rr2, _, err := q.retrieveCache(q.provider, ns.Ns, dns.TypeA)
 			if err != nil {
 				continue
 			}
-			for _, fallbackRR := range rr2 {
-				if _, ok := fallbackRR.(*dns.A); ok {
-					insertFallbackServer(targetServer, &fallbackServers, fallbackRR)
+
+			for _, aItem := range rr2 {
+				if aItemConv, ok := aItem.(*dns.A); !ok {
+					continue
+				} else if targetServer == "" {
+					targetServer = aItemConv.A.String()
+				} else {
+					insertFallbackServer(targetServer, &fallbackServers, aItemConv)
 				}
 			}
 		}
+
 		rangelimit = i
 		break
 	}
