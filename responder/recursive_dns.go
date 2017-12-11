@@ -32,7 +32,6 @@ import (
 	"math/rand"
 	"net"
 	"os"
-	"reflect"
 	"runtime/debug"
 	"strings"
 	"time"
@@ -284,227 +283,10 @@ func newQueryParam(vanilla string, record uint16, ilog *logrus.Entry, elog *nlog
 	return &queryParam{dns.Fqdn(vanilla), tokens, record, 0, false, 0, "", false, nil, make([]historyItem, 0), new(bytes.Buffer), 0, true, nil, ilog, elog, provider, new([]dns.RR), new([]dns.RR), rt, h}
 }
 
-/// define it here for short term clarity
-type cacheData struct {
-	records []dns.RR
-}
-
 /// other than classic dns.RR type (generally used for non-dns specific information caching)
 /// also saving the key (just to be sure)
 type cacheItem struct {
 	key, value string
-}
-
-/// TODO -- remove all usage of non-receiver calls to cache
-/// provider either tenta or opennic; domain is fqdn form
-func storeCache(provider, domain string, _recordLiteral interface{}) (time.Duration, *dnsError) {
-	var retDuration time.Duration
-	if provider == dnsProviderOpennic || provider == dnsProviderTenta {
-		recordLiteral, ok := _recordLiteral.([]dns.RR)
-		if !ok {
-			/// perhaps too chatty?
-			return retDuration, newError(errorInvalidArgument, severityMajor, "invalid argument [%s/%s] expected []RR got %s ", provider, domain, reflect.TypeOf(_recordLiteral).String())
-		}
-		ulteriorRR := make([]dns.RR, 0)
-		ulteriorDomain := make([]string, 0)
-		t := cache2go.Cache(provider + "/" + domain)
-		lockwait := time.Now()
-		retDuration += time.Now().Sub(lockwait)
-		for _, rr := range recordLiteral {
-			if a, ok := rr.(*dns.A); ok {
-				// logger.debug("Trying also to store [%s]\n", fmt.Sprintf("%s.IN-ADDR.ARPA.\t%d\tIN\tPTR\t%s", a.A.String(), a.Hdr.Ttl, domain))
-				ptr, err := dns.NewRR(fmt.Sprintf("%s.IN-ADDR.ARPA.\t%d\tIN\tPTR\t%s", a.A.String(), a.Hdr.Ttl, domain))
-				if err == nil {
-					ulteriorRR = append(ulteriorRR, ptr)
-					ulteriorDomain = append(ulteriorDomain, ptr.Header().Name)
-				}
-			}
-			var strToAdd string
-			switch rr.(type) {
-			case *dns.RRSIG, *dns.DNSKEY, *dns.TSIG, *dns.DS:
-				strToAdd = rr.String()
-			default:
-				strToAdd = strings.ToLower(rr.String())
-			}
-
-			t.Add(strToAdd, time.Duration(rr.Header().Ttl+1)*time.Second, nil)
-		}
-
-		for i, ptr := range ulteriorRR {
-			storeCache(provider, ulteriorDomain[i], []dns.RR{ptr})
-		}
-	} else if provider == "common" {
-		recordLiteral, ok := _recordLiteral.([]cacheItem)
-		if !ok {
-			// too chatty?
-			return retDuration, newError(errorInvalidArgument, severityMajor, "invalid argument [%s/%s] expected []string got %s ", provider, domain, reflect.TypeOf(_recordLiteral).String())
-		}
-		com := cache2go.Cache(provider + "/" + domain)
-		lockwait := time.Now()
-		retDuration += time.Now().Sub(lockwait)
-		for _, item := range recordLiteral {
-			com.Add(item.key, 0, item.value)
-		}
-	}
-	return retDuration, nil
-}
-
-func (q *queryParam) storeCache(provider, domain string, _recordLiteral interface{}) (time.Duration, *dnsError) {
-	var retDuration time.Duration
-	if provider == dnsProviderOpennic || provider == dnsProviderTenta {
-		recordLiteral, ok := _recordLiteral.([]dns.RR)
-		if !ok {
-			/// perhaps too chatty?
-			return retDuration, newError(errorInvalidArgument, severityMajor, "invalid argument [%s/%s] expected []RR got %s ", provider, domain, reflect.TypeOf(_recordLiteral).String())
-		}
-		ulteriorRR := make([]dns.RR, 0)
-		ulteriorDomain := make([]string, 0)
-		t := cache2go.Cache(provider + "/" + domain)
-		lockwait := time.Now()
-		retDuration += time.Now().Sub(lockwait)
-		for _, rr := range recordLiteral {
-			if a, ok := rr.(*dns.A); ok {
-				q.debug("Trying also to store [%s]\n", fmt.Sprintf("%s.IN-ADDR.ARPA.\t%d\tIN\tPTR\t%s", a.A.String(), a.Hdr.Ttl, domain))
-				ptr, err := dns.NewRR(fmt.Sprintf("%s.IN-ADDR.ARPA.\t%d\tIN\tPTR\t%s", a.A.String(), a.Hdr.Ttl, domain))
-				if err == nil {
-					ulteriorRR = append(ulteriorRR, ptr)
-					ulteriorDomain = append(ulteriorDomain, ptr.Header().Name)
-				}
-			}
-
-			/// cache duplication protection for records that should be unique
-			if rr.Header().Rrtype == dns.TypeSOA || rr.Header().Rrtype == dns.TypeCNAME {
-				/// it has an entry for that type of record, so skipping
-				if _, _, e := q.retrieveCache(provider, domain, rr.Header().Rrtype); e == nil {
-					continue
-				}
-			}
-
-			// timeBytes, _ := time.Now().Add(time.Duration(rr.Header().Ttl) * time.Second).MarshalText()
-			q.debug("Trying to store [%s/%s] [%v] for [%d]\n", provider, domain, rr, rr.Header().Ttl)
-			var strToAdd string
-			switch rr.(type) {
-			case *dns.RRSIG, *dns.DNSKEY, *dns.TSIG, *dns.DS:
-				strToAdd = rr.String()
-			default:
-				strToAdd = strings.ToLower(rr.String())
-			}
-			t.Add(strToAdd, time.Duration(rr.Header().Ttl+1)*time.Second, q.chainOfTrustIntact)
-		}
-		for i, ptr := range ulteriorRR {
-			q.storeCache(provider, ulteriorDomain[i], []dns.RR{ptr})
-		}
-	} else if provider == "common" {
-		recordLiteral, ok := _recordLiteral.([]cacheItem)
-		if !ok {
-			// too chatty?
-			return retDuration, newError(errorInvalidArgument, severityMajor, "invalid argument [%s/%s] expected []string got %s ", provider, domain, reflect.TypeOf(_recordLiteral).String())
-		}
-		com := cache2go.Cache(provider + "/" + domain)
-		lockwait := time.Now()
-		retDuration += time.Now().Sub(lockwait)
-		for _, item := range recordLiteral {
-			q.debug("saving item: [%s-%s-%s] -> [%s]\n", provider, domain, item.key, item.value)
-			//err := b.Put([]byte(item.key), []byte(item.value))
-			com.Add(item.key, 0, item.value)
-		}
-	}
-	return retDuration, nil
-}
-
-func (q *queryParam) retrieveCache(provider, domain string, recordType uint16) (retrr []dns.RR, retDuration time.Duration, e *dnsError) {
-	retrr = make([]dns.RR, 0)
-	cacheTab := cache2go.Cache(provider + "/" + domain)
-	if provider == dnsProviderTenta || provider == dnsProviderOpennic {
-		allTrue := true
-		cacheTab.Foreach(func(key interface{}, data *cache2go.CacheItem) {
-			rrString, ok := key.(string)
-			if !ok {
-				/// error. handle it.
-				return
-			}
-			rr, err := dns.NewRR(rrString)
-			if err != nil {
-				return
-			}
-			inCacheDuration := uint32(time.Now().Sub(data.CreatedOn()).Seconds())
-			rr.Header().Ttl -= inCacheDuration
-			if rr.Header().Ttl < 0 {
-				return
-			}
-			if data.Data() != nil && data.Data().(bool) == false {
-				allTrue = false
-			}
-			/// if record is of desired type, let's put it in the result slice
-			/// amended to return saved RRSIG records for the target record
-			if rr.Header().Rrtype == recordType || (q.CDFlagSet && rr.Header().Rrtype == dns.TypeRRSIG && rr.(*dns.RRSIG).TypeCovered == recordType) {
-				q.debug("[CACHE RET] :: [%s]\n", rr.String())
-				retrr = append(retrr, rr)
-			}
-			/// follow through CNAME redirection, unless of course CNAME is whate we're looking for
-			/// but in order for the client to understand the final result, add the CNAME iself to the result set
-			if rr.Header().Rrtype == dns.TypeCNAME && recordType != dns.TypeCNAME {
-				q.debug("Doing the cname dereference. [%s]->[%s]\n", domain, rr.(*dns.CNAME).Target)
-				retrr = append(retrr, rr)
-				derefRR, tdur, er := q.retrieveCache(provider, rr.(*dns.CNAME).Target, recordType)
-				retDuration += tdur
-				if er == nil {
-					/// adding CNAME dereference to the final result (for context for the final host/record tuple)
-					retrr = append(retrr, derefRR...)
-				}
-			}
-
-		})
-
-		if !allTrue {
-			q.setChainOfTrust(false)
-		}
-	}
-	if len(retrr) == 0 {
-		return nil, retDuration, newError(errorCacheReadError, severityMajor, "cache entry not found [%s -- %s]", provider, domain)
-	}
-	return retrr, retDuration, nil
-}
-
-/// ulteriorly, will return a whole RR line (or more, in fact), if matches the type
-func retrieveCache(provider, domain string, recordType uint16) (retrr []dns.RR, retDuration time.Duration, e *dnsError) {
-	retrr = make([]dns.RR, 0)
-	cacheTab := cache2go.Cache(provider + "/" + domain)
-
-	if provider == dnsProviderTenta || provider == dnsProviderOpennic {
-		cacheTab.Foreach(func(key interface{}, data *cache2go.CacheItem) {
-			rrString, ok := key.(string)
-			if !ok {
-				/// error. handle it.
-				return
-			}
-			rr, err := dns.NewRR(rrString)
-			if err != nil {
-				return
-			}
-			/// if record is of desired type, let's put it in the result slice
-			if rr.Header().Rrtype == recordType {
-				retrr = append(retrr, rr)
-			}
-			/// follow through CNAME redirection, unless of course CNAME is whate we're looking for
-			/// but in order for the client to understand the final result, add the CNAME iself to the result set
-			if rr.Header().Rrtype == dns.TypeCNAME && recordType != dns.TypeCNAME {
-				logger.debug("Doing the cname dereference. [%s]->[%s]\n", domain, rr.(*dns.CNAME).Target)
-				retrr := append(retrr, rr)
-				derefRR, tdur, er := retrieveCache(provider, rr.(*dns.CNAME).Target, recordType)
-				retDuration += tdur
-				if er == nil {
-					/// adding CNAME dereference to the final result (for context for the final host/record tuple)
-					retrr = append(retrr, derefRR...)
-				}
-			}
-
-		})
-	}
-	if len(retrr) == 0 {
-		return nil, retDuration, newError(errorCacheReadError, severityMajor, "cache entry not found [%s -- %s]", provider, domain)
-	}
-	return retrr, retDuration, nil
 }
 
 /// can't really mix this with the RRbased caching, so separate retrieve function for textual data
@@ -576,7 +358,6 @@ func hasTLSCapability(provider, domain, key string) (time.Duration, int) {
 	return tw, serverCapabilityFalse
 }
 
-/// TODO
 func setupDNSClient(client *dns.Client, port *string, target string, tlsCapability int, needsTCP bool, provider string, rt *runtime.Runtime) (tw time.Duration) {
 	if tlsCapability == serverCapabilityTrue {
 		hostname := target
@@ -1147,7 +928,7 @@ func existingFallback(t string, l *[]string, rr dns.RR) bool {
 
 /// this is the main loop for domain tokens -- returns one ip address or error
 func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsError) {
-	targetServer := rootServers[q.provider][0].ipv4
+	targetServer := "" //rootServers[q.provider][0].ipv4
 	var fallbackServers []string
 	rangelimit := 0
 	/// first of all check the cache
@@ -1188,6 +969,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 	for i := len(q.tokens) - 1; i >= 0; i-- {
 		/// let's just handle A records for now (will add CNAME, SOA, negative cache and whatever else in the future)
 		tok := q.tokens[i]
+		q.debug("Checking NS records in cache. Iteration [%s] of [%s]\n", tok, q.vanilla)
 		rr, tw, err := q.retrieveCache(q.provider, tok, dns.TypeNS)
 		q.timeWasted += tw
 
@@ -1195,7 +977,6 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 			continue
 		}
 		q.debug("Found NS record.")
-
 		nsCache := []*dns.NS{}
 		for _, nsItem := range rr {
 			if nsItemConv, ok := nsItem.(*dns.NS); !ok {
@@ -1226,13 +1007,48 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 			}
 		}
 
-		rangelimit = i
-		break
+		// /// means A record for NS got stale before NS records for domain
+		// /// launch separate resolve for NS server/A, and continue with that address
+		// if targetServer == "" {
+		// 	q.debug("Cache HIT for NS, but A is out of date. Launching resolve for A record. Hold on.\n")
+		// 	for _, ns := range nsCache {
+		// 		/// TODO -- recursive stack overflow
+		// 		q.ilog.Infof("Cache hit for [%s] - NS -> [%s]. Launching a resolve for NS/A.", tok, ns.Ns)
+		// 		qNSA := newQueryParam(ns.Ns, dns.TypeA, q.ilog, q.elog, q.provider, q.rt, q.exchangeHistory)
+
+		// 		if NSAnswer, e := qNSA.doResolve(resolveMethodRecursive); e != nil || NSAnswer == nil || len(NSAnswer) == 0 {
+		// 			continue
+		// 		} else {
+		// 			for _, aItem := range NSAnswer {
+		// 				if aItemConv, ok := aItem.(*dns.A); !ok {
+		// 					continue
+		// 				} else if targetServer == "" {
+		// 					targetServer = aItemConv.A.String()
+		// 				} else {
+		// 					insertFallbackServer(targetServer, &fallbackServers, aItemConv)
+		// 				}
+		// 			}
+
+		// 		}
+		// 		if targetServer != "" {
+		// 			break
+		// 		}
+		// 	}
+
+		// }
+		if targetServer != "" {
+			rangelimit = i
+			break
+		}
 	}
 
 	if q.continuation {
 		rangelimit = q.rangeLimit
 		targetServer = q.serverHint
+	}
+
+	if targetServer == "" {
+		targetServer = rootServers[q.provider][0].ipv4
 	}
 
 	if resolveTechnique != resolveMethodFinalQuestion {
@@ -1594,6 +1410,9 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 
 									if len(cnameSlice) > 0 {
 										finalTarget := untangleCNAMEindirections(token, cnameSlice)
+										/// TODO -- invalid mem address or nil ptr deref
+										q.ilog.Infof("line 1413 nil ptr -- [%v] -- [%v] -- [%v]", finalTarget, token, cnameSlice)
+										q.ilog.Infof("line 1413 nil ptr -- [%v]", q)
 										soaDerefCont := newQueryParam(finalTarget.Target, q.record, q.ilog, q.elog, q.provider, q.rt, q.exchangeHistory)
 										soaDerefRes, err := soaDerefCont.doResolve(resolveMethodRecursive)
 										q.logBuffer.Write(soaDerefCont.logBuffer.Bytes())
@@ -1992,7 +1811,6 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 		answer, err := qp.doResolve(resolveMethodToUse)
 		resolvTime := time.Now().Sub(startTime)
 		response := new(dns.Msg)
-
 		if err != nil {
 			elogger.Queuef("RESOLVE RETURNED ERROR [%s]", err.String())
 			if err.errorCode != errorUnresolvable {
@@ -2014,6 +1832,7 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 			response.SetRcode(r, dns.RcodeSuccess)
 		}
 
+		elogger.Queuef("\nTransaction history:\n%s\n", qp.exchangeHistory)
 		response.RecursionAvailable = true
 		if qp.chainOfTrustIntact && qp.CDFlagSet != true {
 			response.AuthenticatedData = true
@@ -2028,7 +1847,6 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 }
 
 func ServeDNS(cfg runtime.RecursorConfig, rt *runtime.Runtime, v4 bool, net string, d *runtime.ServerDomain, opennicMode bool, dnssecMode bool) {
-	// TODO: Get rid of these old variables variables
 	*dnssecEnabled = dnssecMode
 	*debugLevel = true
 	provider := "tenta"

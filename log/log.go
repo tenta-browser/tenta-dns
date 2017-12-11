@@ -24,6 +24,8 @@ package log
 
 import (
 	"fmt"
+	"io/ioutil"
+	"os"
 
 	"github.com/mattn/go-colorable"
 	"github.com/sirupsen/logrus"
@@ -47,7 +49,18 @@ func (l *EventualLogger) Flush(target *logrus.Entry) {
 	for _, e := range *l {
 		//target.Infof(e)
 		fmt.Printf("%s", e)
+func (l *EventualLogger) FlushToString() (s string) {
+	for _, line := range *l {
+		s += line
 	}
+	return
+}
+
+func (l *EventualLogger) FlushToFile(nameHint string) {
+	if _, e := os.Stat(nameHint); e == nil {
+		return
+	}
+	ioutil.WriteFile(nameHint, []byte(l.FlushToString()), 0666)
 }
 
 var log *logrus.Logger = logrus.New()
