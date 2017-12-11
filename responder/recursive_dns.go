@@ -1607,14 +1607,9 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 						}
 						q.debug("Sub-Resolve end >>>[%s]\n\n", tHost)
 						q.timeWasted += newq.timeWasted
-						/// the fear that the final A query will result in an unhandled CNAME makes this hack a life-saver
-						// if token == q.vanilla {
-						// 	q.debug("TargetServer found out in last iteration, launching continuation to avoid unhandled CNAME.\n")
-						// 	nnewq := q.newContinationParam(len(q.tokens)-1, targetServer)
-						// 	defer nnewq.join()
-						// 	return nnewq.doResolve(resolveMethodRecursive)
-						// }
-						break
+						if targetServer != "" {
+							break
+						}
 					}
 				}
 			}
