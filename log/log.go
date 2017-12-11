@@ -49,6 +49,8 @@ func (l *EventualLogger) Flush(target *logrus.Entry) {
 	for _, e := range *l {
 		//target.Infof(e)
 		fmt.Printf("%s", e)
+}
+
 func (l *EventualLogger) FlushToString() (s string) {
 	for _, line := range *l {
 		s += line
