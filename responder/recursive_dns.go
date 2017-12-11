@@ -1371,7 +1371,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 						if reply.MsgHdr.Rcode == dns.RcodeSuccess && token == q.vanilla {
 							if q.record == dns.TypeNS || q.record == dns.TypeSOA {
 								q.addToResultSet([]dns.RR{soa})
-							} else {
+							} else if !hasCNAMERecord {
 								/// but before letting this one break out of the loop let's make sure that it's not a CNAME that's waiting at the end of the line
 								/// specifically interesting are the cases, when CNAME dereferences are not revealed by any other types of queries, just A
 								/// more interesting is the case when a CNAME record is not revealed for a CNAME query, just LITERALLY an A query (not even CNAME, yeah),
@@ -1411,8 +1411,6 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 									if len(cnameSlice) > 0 {
 										finalTarget := untangleCNAMEindirections(token, cnameSlice)
 										/// TODO -- invalid mem address or nil ptr deref
-										q.ilog.Infof("line 1413 nil ptr -- [%v] -- [%v] -- [%v]", finalTarget, token, cnameSlice)
-										q.ilog.Infof("line 1413 nil ptr -- [%v]", q)
 										soaDerefCont := newQueryParam(finalTarget.Target, q.record, q.ilog, q.elog, q.provider, q.rt, q.exchangeHistory)
 										soaDerefRes, err := soaDerefCont.doResolve(resolveMethodRecursive)
 										q.logBuffer.Write(soaDerefCont.logBuffer.Bytes())
