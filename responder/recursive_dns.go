@@ -934,7 +934,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 	/// first of all check the cache
 	/// check fqdn directly for the target recordtype
 	resultRR = make([]dns.RR, 0)
-	q.debug("Trying to resolve directly from cache.\n")
+	q.debug("Trying to resolve directly from cache. [%s]\n", q.vanilla)
 	rr, tw, err := q.retrieveCache(q.provider, q.vanilla, q.record)
 	q.timeWasted += tw
 	if err == nil {
@@ -1407,9 +1407,13 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 											addressSlice = append(addressSlice, a)
 										}
 									}
-
+									q.debug("Luring out continuing with a _final_ query. -- [%v]\n", soaCNAME)
 									if len(cnameSlice) > 0 {
 										finalTarget := untangleCNAMEindirections(token, cnameSlice)
+										if scanAdditionalSectionForType(soaCNAME, finalTarget.Target, q.record) != nil {
+											q.debug("Type sought already found, not doing the mid-final query. Bye.\n")
+											return soaCNAME, nil
+										}
 										/// TODO -- invalid mem address or nil ptr deref
 										soaDerefCont := newQueryParam(finalTarget.Target, q.record, q.ilog, q.elog, q.provider, q.rt, q.exchangeHistory)
 										soaDerefRes, err := soaDerefCont.doResolve(resolveMethodRecursive)
@@ -1472,6 +1476,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 					q.debug("partial CNAME block resulted [%v]\n", cnameCont)
 					if err == nil {
 						defer qcname.join()
+						// q.debug("Returning from CNAME untangling [%s]\n\n", cnameCont)
 						return cnameCont, err
 					}
 				} else {
@@ -1494,6 +1499,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 						cnameDereference = append(cnameDereference, rrSlice...)
 					}
 					q.timeWasted += newq.timeWasted
+					q.debug("Came out of the rabbithole [%s]. Returning [%v]\n", cname.Target, cnameDereference)
 					return cnameDereference, err
 				}
 			}
@@ -1727,6 +1733,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 		//qfinal.addToResultSet(finalCnameRR)
 		res, err := qfinal.doResolve(resolveMethodRecursive)
 		q.logBuffer.Write(qfinal.logBuffer.Bytes())
+		q.debug("Returned from FINAL CNAME handling. [%v] + [%v]\n", res, finalCnameRR)
 		if err == nil {
 			res = append(res, finalCnameRR...)
 		}
