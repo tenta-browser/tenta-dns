@@ -895,7 +895,7 @@ func contextIndependentValidateRR(rr dns.RR, domain string) bool {
 func populateFallbackServers(t string, l *[]string, rr []dns.RR) {
 	*l = make([]string, len(rr))
 	for _, r := range rr {
-		if a, ok := r.(*dns.A); ok && !existingFallback(t, l, r) {
+		if a, ok := r.(*dns.A); ok && a.A.String() != "" && !existingFallback(t, l, r) {
 
 			*l = append(*l, a.A.String())
 		}
@@ -906,7 +906,7 @@ func insertFallbackServer(t string, l *[]string, rr dns.RR) {
 	if *l == nil {
 		*l = make([]string, 0)
 	}
-	if a, ok := rr.(*dns.A); ok && !existingFallback(t, l, rr) {
+	if a, ok := rr.(*dns.A); ok && a.A.String() != "" && !existingFallback(t, l, rr) {
 		*l = append(*l, a.A.String())
 	}
 }
