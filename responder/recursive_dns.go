@@ -1561,13 +1561,19 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 					arr, tw, err := q.retrieveCache(q.provider, tHost, dns.TypeA)
 					q.timeWasted += tw
 					if err == nil {
-						a := arr[0].(*dns.A)
-						q.debug("Success from cache.\n")
-						targetServer = a.A.String()
-						if len(arr) > 1 {
-							populateFallbackServers(targetServer, &fallbackServers, arr[1:])
+						for _, aItem := range arr {
+							if aItemConv, ok := aItem.(*dns.A); !ok {
+								continue
+							} else if targetServer == "" {
+								targetServer = aItemConv.A.String()
+							} else {
+								insertFallbackServer(targetServer, &fallbackServers, aItemConv)
+							}
 						}
-						break
+						if targetServer != "" {
+							break
+						}
+
 					}
 				}
 
