@@ -1829,11 +1829,11 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 					rt.SlackWH.SendFeedback(runtime.NewPayload(operatorID, fmt.Sprintf("%s [%s/RD=%v/CD=%v]",
 						qp.vanilla, dns.TypeToString[r.Question[0].Qtype], r.RecursionDesired, r.CheckingDisabled), err.String(), ""))
 				}
+				elogger.Flush(l)
 			} else {
 				elogger.Queuef("[%s -- %d] unresolvable.", qp.vanilla, qp.record)
 				response.SetRcode(r, dns.RcodeNameError)
 			}
-			elogger.Flush(l)
 		} else {
 			elogger.Queuef("ANSWER is: [%v][%v][%s]", resolvTime, qp.timeWasted, answer)
 			response.SetRcode(r, dns.RcodeSuccess)
