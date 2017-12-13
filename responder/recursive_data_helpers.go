@@ -385,7 +385,7 @@ func retrieveCache(provider, domain string, recordType uint16) (retrr []dns.RR, 
 			/// if record is of desired type, let's put it in the result slice
 			/// amended to return saved RRSIG records for the target record
 			if rr.Header().Rrtype == recordType {
-				logger.debug("[CACHE RET] :: [%s]\n", rr.String())
+				// logger.debug("[CACHE RET] :: [%s]\n", rr.String())
 				retrr = append(retrr, rr)
 			}
 			/// follow through CNAME redirection, unless of course CNAME is whate we're looking for
