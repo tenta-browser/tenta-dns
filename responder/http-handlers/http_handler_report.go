@@ -25,10 +25,11 @@ package http_handlers
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/tenta-browser/tenta-dns/common"
-	"github.com/tenta-browser/tenta-dns/runtime"
 	"net/http"
 	"time"
+
+	"github.com/tenta-browser/tenta-dns/common"
+	"github.com/tenta-browser/tenta-dns/runtime"
 
 	"github.com/miekg/dns"
 	"github.com/sirupsen/logrus"
@@ -70,6 +71,7 @@ func HandleHTTPReport(cfg runtime.NSnitchConfig, rt *runtime.Runtime, d *runtime
 					data.Message = "Internal Error"
 					data.Code = 500
 				}
+				extraHeaders(cfg, w, r)
 				mustMarshall(w, data, lg)
 				return
 			}
