@@ -1414,6 +1414,9 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 									q.debug("Luring out continuing with a _final_ query. -- [%v]\n", soaCNAME)
 									if len(cnameSlice) > 0 {
 										finalTarget := untangleCNAMEindirections(token, cnameSlice)
+										if finalTarget == nil {
+											return nil, newError(errorInvalidArgument, severityMajor, "cannot untangle [%s] from [%v]", token, cnameSlice)
+										}
 										if scanAdditionalSectionForType(soaCNAME, finalTarget.Target, q.record) != nil {
 											q.debug("Type sought already found, not doing the mid-final query. Bye.\n")
 											return soaCNAME, nil
