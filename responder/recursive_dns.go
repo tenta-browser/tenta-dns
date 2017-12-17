@@ -959,11 +959,13 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 			q.debug("Cache HIT. Returning solution. [%v]\n", rr)
 			return rr, nil
 		} else {
-			q.debug("Using last CNAME and launching a new resolve form there.\n")
 			lastCname := untangleCNAMEindirections(q.vanilla, cnames)
-			qCacheCNAME := newQueryParam(lastCname.Target, q.record, q.ilog, q.elog, q.provider, q.rt, q.exchangeHistory)
-			qCacheCNAME.addToResultSet(rr)
-			return qCacheCNAME.doResolve(resolveTechnique)
+			if lastCname != nil {
+				q.debug("Using last CNAME and launching a new resolve form there.\n")
+				qCacheCNAME := newQueryParam(lastCname.Target, q.record, q.ilog, q.elog, q.provider, q.rt, q.exchangeHistory)
+				qCacheCNAME.addToResultSet(rr)
+				return qCacheCNAME.doResolve(resolveTechnique)
+			}
 		}
 	} else if resolveTechnique == resolveMethodCacheOnly {
 		q.debug("Cache miss, and requested cache response only. Returning failure.")
