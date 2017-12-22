@@ -24,16 +24,19 @@ import (
 )
 
 var (
-	ip      = flag.String("ip", "127.0.0.1", "IP address to stress")
-	port    = flag.Uint("port", 53, "Port to test")
-	tcp     = flag.Bool("tcp", false, "Whether to use TCP mode")
-	tls     = flag.Bool("tls", false, "Whether to use TLS (implies -tcp)")
-	workers = flag.Uint("workers", 0, "Number of simultaneous test workers to run (0 => autoselect)")
-	quiet   = flag.Bool("quiet", false, "Don't produce any output to the terminal")
-	verbose = flag.Bool("verbose", false, "Produce lots of output to the terminal (overrides the -quiet flag)")
-	limit   = flag.Uint("limit", 1000, "How many domain names to use in the test (max 1000000)")
-	errfile = flag.String("errfile", "", "If specified, write errors to this file")
+	ip       = flag.String("ip", "127.0.0.1", "IP address to stress")
+	port     = flag.Uint("port", 53, "Port to test")
+	tcp      = flag.Bool("tcp", false, "Whether to use TCP mode")
+	tls      = flag.Bool("tls", false, "Whether to use TLS (implies -tcp)")
+	workers  = flag.Uint("workers", 0, "Number of simultaneous test workers to run (0 => autoselect)")
+	quiet    = flag.Bool("quiet", false, "Don't produce any output to the terminal")
+	verbose  = flag.Bool("verbose", false, "Produce lots of output to the terminal (overrides the -quiet flag)")
+	limit    = flag.Uint("limit", 1000, "How many domain names to use in the test (max 1000000)")
+	errfile  = flag.String("errfile", "", "If specified, write errors to this file")
+	printver = flag.Bool("version", false, "Print the version and exit")
 )
+
+var version string
 
 const (
 	maxLimit  = 1000000
@@ -52,6 +55,10 @@ func main() {
 	flag.Usage = usage
 	flag.Parse()
 
+	if *printver {
+		fmt.Println(version)
+		os.Exit(0)
+	}
 	if *limit > maxLimit {
 		fmt.Printf("limit must be < %d", maxLimit)
 		os.Exit(1)
