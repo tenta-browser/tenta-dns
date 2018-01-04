@@ -25,17 +25,39 @@ package blacklist
 import (
 	"bytes"
 	"fmt"
-	"github.com/tenta-browser/tenta-dns/common"
-	"github.com/tenta-browser/tenta-dns/runtime"
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/tenta-browser/tenta-dns/common"
+	"github.com/tenta-browser/tenta-dns/runtime"
 
 	"github.com/leonelquinteros/gorand"
 	"github.com/miekg/dns"
 	"github.com/syndtr/goleveldb/leveldb"
 )
+
+// Enforcer enforces blacklists.
+type Enforcer struct {
+	rt  *runtime.Runtime
+	cfg runtime.NSnitchConfig
+	dns *dns.Client
+}
+
+// New returns an initialized blacklist Enforcer.
+func New(rt *runtime.Runtime, cfg runtime.NSnitchConfig) *Enforcer {
+	return &Enforcer{
+		rt:  rt,
+		cfg: cfg,
+		dns: &dns.Client{
+			DialTimeout:  4 * time.Second,
+			ReadTimeout:  4 * time.Second,
+			WriteTimeout: time.Second,
+		},
+	}
+}
 
 type dnscheckresponse struct {
 	list    string
@@ -43,27 +65,29 @@ type dnscheckresponse struct {
 	isFound bool
 }
 
-func Checkblacklists(cfg runtime.NSnitchConfig, rt *runtime.Runtime, ip net.IP) *common.BlacklistData {
+// Check checks an IP address against registered blacklists.
+func (e *Enforcer) Check(ip net.IP) *common.BlacklistData {
 	// TODO: Add deadline for lookups
 	ret := &common.BlacklistData{Results: make(map[string]bool)}
 	responses := make(chan *dnscheckresponse)
-	started := 0
-	for _, rbl := range cfg.Blacklists {
-		go lookup(rt, ip, rbl, responses)
-		started += 1
+	wg := &sync.WaitGroup{}
+	wg.Add(len(e.cfg.Blacklists))
+	for _, rbl := range e.cfg.Blacklists {
+		go e.lookup(ip, rbl, responses)
 	}
-	for started > 0 {
-		select {
-		case response := <-responses:
-			started -= 1
-			if !response.isError {
-				ret.Results[response.list] = response.isFound
-				ret.NumberOfLists += 1
-				if response.isFound {
-					ret.NumberFound += 1
-				}
-			}
-			break
+	go func() {
+		wg.Wait()
+		close(responses)
+	}()
+	for resp := range responses {
+		wg.Done()
+		if resp.isError {
+			continue
+		}
+		ret.Results[resp.list] = resp.isFound
+		ret.NumberOfLists++
+		if resp.isFound {
+			ret.NumberFound++
 		}
 	}
 	if ret.NumberFound > 0 {
@@ -72,72 +96,89 @@ func Checkblacklists(cfg runtime.NSnitchConfig, rt *runtime.Runtime, ip net.IP) 
 	return ret
 }
 
-func lookup(rt *runtime.Runtime, ip net.IP, rbl string, responder chan *dnscheckresponse) {
+func ipToURL(ip net.IP, bl string) string {
+	// TODO: Add support for IPv6.
 	ipparts := strings.Split(ip.String(), ".")
-	// TODO: IPv6
-	url := fmt.Sprintf("%s.%s.%s.%s.%s.", ipparts[3], ipparts[2], ipparts[1], ipparts[0], rbl)
-	ret := &dnscheckresponse{list: rbl, isError: false, isFound: false}
-	truebyte := []byte("1")
-	errbyte := []byte("2")
+	return fmt.Sprintf("%s.%s.%s.%s.%s.", ipparts[3], ipparts[2], ipparts[1], ipparts[0], bl)
+}
 
+type cacheValue int
+
+func (c cacheValue) bytes() []byte {
+	return []byte(strconv.Itoa(int(c)))
+}
+
+const (
+	cvFalse cacheValue = iota
+	cvTrue
+	cvError
+)
+
+func (e *Enforcer) lookup(ip net.IP, rbl string, responder chan<- *dnscheckresponse) {
+	url := ipToURL(ip, rbl)
 	cachekey := []byte(fmt.Sprintf("rbl/%s", url))
-	val, dberr := rt.DB.Get(cachekey, nil)
-	rt.Stats.Tick("database", "get")
+
+	ret := &dnscheckresponse{list: rbl}
+	val, dberr := e.rt.DB.Get(cachekey, nil)
+	e.rt.Stats.Tick("database", "get")
 	if dberr == nil {
 		//fmt.Printf("Blacklist: Loaded %s from cache\n", url)
-		if bytes.Equal(val, truebyte) {
+		if bytes.Equal(val, cvTrue.bytes()) {
 			ret.isFound = true
-		} else if bytes.Equal(val, errbyte) {
+		} else if bytes.Equal(val, cvError.bytes()) {
 			ret.isError = true
 		}
 		responder <- ret
 		return
 	}
 	if dberr != leveldb.ErrNotFound {
-		rt.Stats.Tick("database", "get_error")
+		e.rt.Stats.Tick("database", "get_error")
 	}
 
 	//fmt.Printf("Blacklist: Doing lookup on %s\n", url)
 	m := new(dns.Msg)
 	m.SetQuestion(url, dns.TypeA)
-	c := new(dns.Client)
-	c.DialTimeout = time.Second * 4
-	c.ReadTimeout = time.Second * 4
-	c.WriteTimeout = time.Second
-	in, _, dnserr := c.Exchange(m, "8.8.8.8:53")
+	in, _, dnserr := e.dns.Exchange(m, "8.8.8.8:53")
 	if dnserr != nil {
-		fmt.Printf("Blacklist: Error performing lookup on %s: %s\n", url, dnserr.Error())
+		//fmt.Printf("Blacklist: Error performing lookup on %s: %v\n", url, dnserr)
 		ret.isError = true
 	} else {
 		//fmt.Printf("Blacklist: Performed lookup in %d time\n", rtt)
 		if in.Rcode == dns.RcodeNameError {
-			//fmt.Printf("Blacklist: No record found\n")
+			//fmt.Println("Blacklist: No record found")
 			ret.isFound = false
 		} else {
-			//fmt.Printf("Blacklist: Record found\n")
+			//fmt.Println("Blacklist: Record found")
 			ret.isFound = true
 		}
 	}
-	trans, dberr := rt.DB.OpenTransaction()
-	if dberr == nil {
-		if ret.isError {
-			trans.Put(cachekey, errbyte, nil)
-		} else if ret.isFound {
-			trans.Put(cachekey, truebyte, nil)
-		} else {
-			trans.Put(cachekey, []byte("0"), nil)
-		}
-		key := append([]byte("blacklist/"), []byte(strconv.FormatInt(time.Now().Unix(), 10))...)
-		key = append(key, []byte("/")...)
-		uuid, _ := gorand.UUID()
-		key = append(key, []byte(uuid)...)
-		trans.Put(key, cachekey, nil)
-
-		dberr := trans.Commit()
-		if dberr != nil {
-			rt.Stats.TickN("database", "put_error", 2)
-		}
-		rt.Stats.TickN("database", "put", 2)
+	trans, dberr := e.rt.DB.OpenTransaction()
+	if dberr != nil {
+		responder <- ret
+		return
 	}
-	responder <- ret
+	e.writeCache(trans, cachekey, ret)
+}
+
+func (e *Enforcer) writeCache(trans *leveldb.Transaction, k []byte, resp *dnscheckresponse) {
+	var v cacheValue
+	switch {
+	case resp.isError:
+		v = cvError
+	case resp.isFound:
+		v = cvTrue
+	default:
+		v = cvFalse
+	}
+	trans.Put(k, v.bytes(), nil)
+	key := append([]byte("blacklist/"), []byte(strconv.FormatInt(time.Now().Unix(), 10))...)
+	key = append(key, []byte("/")...)
+	uuid, _ := gorand.UUID()
+	key = append(key, []byte(uuid)...)
+	trans.Put(key, k, nil)
+	if err := trans.Commit(); err != nil {
+		e.rt.Stats.TickN("database", "put_error", 2)
+		trans.Discard()
+	}
+	e.rt.Stats.TickN("database", "put", 2)
 }

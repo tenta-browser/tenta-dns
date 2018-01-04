@@ -24,11 +24,12 @@ package http_handlers
 
 import (
 	"fmt"
+	"net"
+	"net/http"
+
 	"github.com/tenta-browser/tenta-dns/common"
 	"github.com/tenta-browser/tenta-dns/responder/blacklist"
 	"github.com/tenta-browser/tenta-dns/runtime"
-	"net"
-	"net/http"
 
 	"github.com/gorilla/mux"
 	"github.com/sirupsen/logrus"
@@ -74,11 +75,12 @@ func HandleHTTPBLLookup(cfg runtime.NSnitchConfig, rt *runtime.Runtime, lgr *log
 			}
 		}
 
+		bl := blacklist.New(rt, cfg)
 		rawip := net.ParseIP(ip)
 		if rawip != nil {
 			ipv4 := rawip.To4()
 			if ipv4 != nil {
-				ret = blacklist.Checkblacklists(cfg, rt, ipv4)
+				ret = bl.Check(ipv4)
 			} else {
 				err = &BLLookupError{s: fmt.Sprintf("Unable to perform lookup on IPv6 at present"), Code: 422}
 			}
