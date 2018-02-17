@@ -80,7 +80,7 @@ We rely on lots of excellent open source libraries, including [miekg/dns](https:
 [osrg/gobgp](https://github.com/osrg/gobgp), as well as many others. For a complete list of our dependencies and required notification,
 please take a look at [NOTICES.md](NOTICES.md)
 
-The `words.txt` file used for random names in NSnitch is from [dreamsteep.com](http://dreamsteep.com/projects/the-english-open-word-list.html).
+The `words.txt` file used for random names in NSnitch is from [dreamsteep.com](http://diginoodles.com/The_English_Open_Word_List_%28EOWL%29).
 
 License
 =======
