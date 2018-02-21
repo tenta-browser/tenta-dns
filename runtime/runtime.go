@@ -24,10 +24,11 @@ package runtime
 
 import (
 	"encoding/binary"
-	"github.com/tenta-browser/tenta-dns/log"
 	"os"
 	"sync"
 	"time"
+
+	"github.com/tenta-browser/tenta-dns/log"
 
 	"github.com/sirupsen/logrus"
 	"github.com/syndtr/goleveldb/leveldb"
