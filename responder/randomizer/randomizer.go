@@ -27,12 +27,13 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"github.com/tenta-browser/tenta-dns/common"
-	"github.com/tenta-browser/tenta-dns/log"
-	"github.com/tenta-browser/tenta-dns/runtime"
 	"io"
 	"os"
 	"unicode"
+
+	"github.com/tenta-browser/tenta-dns/common"
+	"github.com/tenta-browser/tenta-dns/log"
+	"github.com/tenta-browser/tenta-dns/runtime"
 
 	"github.com/leonelquinteros/gorand"
 )
@@ -48,7 +49,7 @@ func NewUUIDRandomizer() Randomizer {
 }
 
 func (rnd UUIDRandomizer) Rand() (string, error) {
-	uuid, err := gorand.UUID()
+	uuid, err := gorand.UUIDv4()
 	return string(uuid), err
 }
 

@@ -173,7 +173,7 @@ func (e *Enforcer) writeCache(trans *leveldb.Transaction, k []byte, resp *dnsche
 	trans.Put(k, v.bytes(), nil)
 	key := append([]byte("blacklist/"), []byte(strconv.FormatInt(time.Now().Unix(), 10))...)
 	key = append(key, []byte("/")...)
-	uuid, _ := gorand.UUID()
+	uuid, _ := gorand.UUIDv4()
 	key = append(key, []byte(uuid)...)
 	trans.Put(key, k, nil)
 	if err := trans.Commit(); err != nil {
