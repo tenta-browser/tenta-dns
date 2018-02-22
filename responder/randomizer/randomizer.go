@@ -50,7 +50,7 @@ func NewUUIDRandomizer() Randomizer {
 
 func (rnd UUIDRandomizer) Rand() (string, error) {
 	uuid, err := gorand.UUIDv4()
-	return string(uuid), err
+	return string(uuid[:]), err
 }
 
 type WordRandomizer struct {
