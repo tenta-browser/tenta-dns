@@ -1,0 +1,67 @@
+[[constraint]]
+  name = "github.com/BurntSushi/toml"
+  version = "0.3.0"
+
+[[constraint]]
+  name = "github.com/coreos/go-systemd"
+  version = "16.0.0"
+
+[[constraint]]
+  name = "github.com/gorilla/mux"
+  version = "1.6.1"
+
+[[constraint]]
+  name = "github.com/leonelquinteros/gorand"
+  version = "1.0.0"
+
+[[constraint]]
+  name = "github.com/mattn/go-colorable"
+  version = "0.0.9"
+
+[[constraint]]
+  name = "github.com/miekg/dns"
+  version = "1.0.4"
+
+[[constraint]]
+  name = "github.com/milosgajdos83/tenus"
+  branch = "master"
+
+[[constraint]]
+  name = "github.com/muesli/cache2go"
+  version = "0.1.0"
+
+[[constraint]]
+  name = "github.com/oschwald/maxminddb-golang"
+  version = "1.2.1"
+
+[[constraint]]
+  name = "github.com/osrg/gobgp"
+  version = "1.28.0"
+
+[[constraint]]
+  branch = "master"
+  name = "github.com/sasha-s/go-hll"
+
+[[constraint]]
+  name = "github.com/sirupsen/logrus"
+  version = "1.0.4"
+
+[[constraint]]
+  branch = "master"
+  name = "github.com/syndtr/goleveldb"
+
+[[constraint]]
+  branch = "master"
+  name = "github.com/tenta-browser/go-highway"
+
+[[constraint]]
+  branch = "master"
+  name = "github.com/tevino/abool"
+
+[[constraint]]
+  name = "github.com/x-cray/logrus-prefixed-formatter"
+  version = "0.5.2"
+
+[prune]
+  go-tests = true
+  unused-packages = true
