@@ -20,5 +20,11 @@
 
 @ECHO OFF
 
-go install -v github.com/tenta-browser/tenta-dns
-go install -v github.com/tenta-browser/tenta-dns/stresser
+FOR /F "tokens=* USEBACKQ" %%F IN (`git rev-parse --short HEAD`) DO (
+    SET version="development@%%F"
+)
+
+echo "Compiling %version%"
+
+go install -ldflags "-X main.version=$version" -v github.com/tenta-browser/tenta-dns
+go install -ldflags "-X main.version=$version" -v github.com/tenta-browser/tenta-dns/stresser

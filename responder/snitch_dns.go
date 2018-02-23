@@ -26,12 +26,13 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"github.com/tenta-browser/tenta-dns/common"
-	"github.com/tenta-browser/tenta-dns/runtime"
 	"net"
 	"regexp"
 	"strconv"
 	"time"
+
+	"github.com/tenta-browser/tenta-dns/common"
+	"github.com/tenta-browser/tenta-dns/runtime"
 
 	"github.com/tenta-browser/tenta-dns/log"
 
@@ -385,8 +386,8 @@ func handleSnitch(cfg runtime.NSnitchConfig, rt *runtime.Runtime, d *runtime.Ser
 			// Write the DB index for cleanup
 			key := append([]byte("queries/"), []byte(strconv.FormatInt(tme, 10))...)
 			key = append(key, []byte("/")...)
-			uuid, _ := gorand.UUID()
-			key = append(key, []byte(uuid)...)
+			uuid, _ := gorand.UUIDv4()
+			key = append(key, []byte(uuid[:])...)
 			if err := rt.DBPut(key, query); err != nil {
 				lgr.Warnf("Failed to save query index: %s", err.Error())
 			}

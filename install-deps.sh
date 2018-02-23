@@ -20,6 +20,7 @@
 #
 # install-deps.sh: Install libs on *nix / Mac
 
-echo "Installing dependencies to GOPATH/pkg"
+echo "Installing dependencies"
 
-go get -u -v github.com/tenta-browser/tenta-dns/...
+go get -u -v github.com/golang/dep/cmd/dep
+$GOPATH/bin/dep ensure

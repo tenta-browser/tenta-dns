@@ -25,11 +25,12 @@ package http_handlers
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/tenta-browser/tenta-dns/common"
-	"github.com/tenta-browser/tenta-dns/runtime"
 	"net"
 	"net/http"
 	"time"
+
+	"github.com/tenta-browser/tenta-dns/common"
+	"github.com/tenta-browser/tenta-dns/runtime"
 
 	"github.com/leonelquinteros/gorand"
 	"github.com/sirupsen/logrus"
@@ -41,7 +42,7 @@ type extendedHttpHandler func(w http.ResponseWriter, r *http.Request, lg *logrus
 func wrapExtendedHttpHandler(rt *runtime.Runtime, lg *logrus.Entry, name string, ehandler extendedHttpHandler) httpHandler {
 	return func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		request_id, err := gorand.UUID()
+		request_id, err := gorand.UUIDv4()
 		if err != nil {
 			lg.Errorf("Unable to generate request id: %s", err.Error())
 			panic(err)

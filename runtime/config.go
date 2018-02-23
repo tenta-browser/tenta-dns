@@ -25,14 +25,15 @@ package runtime
 import (
 	"errors"
 	"fmt"
-	"github.com/tenta-browser/tenta-dns/anycast"
-	"github.com/tenta-browser/tenta-dns/common"
-	"github.com/tenta-browser/tenta-dns/log"
-	"github.com/tenta-browser/tenta-dns/zones"
 	"io/ioutil"
 	"os"
 	"path/filepath"
 	"regexp"
+
+	"github.com/tenta-browser/tenta-dns/anycast"
+	"github.com/tenta-browser/tenta-dns/common"
+	"github.com/tenta-browser/tenta-dns/log"
+	"github.com/tenta-browser/tenta-dns/zones"
 
 	"github.com/BurntSushi/toml"
 	"github.com/sirupsen/logrus"
@@ -145,6 +146,11 @@ func ParseConfig(path string, checkonly bool, ignoreplatform bool) ConfigHolder 
 		os.Exit(1)
 	}
 	cnt += 1
+
+	if cfg.RateThreshold == 0 {
+		lg.Warnf("Rate limiter threshold not set, using default value of %d", LIMITER_RPS_THRESHOLD)
+		cfg.RateThreshold = LIMITER_RPS_THRESHOLD
+	}
 
 	ensureDefaultPorts(&cfg)
 	if cfg.IncludePath == "" {
