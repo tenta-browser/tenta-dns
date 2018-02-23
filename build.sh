@@ -21,7 +21,7 @@
 
 echo "Compiling to GOPATH/bin"
 
-version="development`date -u +.%Y%m%d.%H%M%S`"
+version="development@`git rev-parse --short HEAD`"
 if [ -n "$BUILD_ID" ]; then
   version="b${BUILD_ID}"
 fi
