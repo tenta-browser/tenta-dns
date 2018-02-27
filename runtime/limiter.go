@@ -23,12 +23,13 @@
 package runtime
 
 import (
-	"github.com/tenta-browser/tenta-dns/log"
 	"math"
 	"math/rand"
 	"net"
 	"sync"
 	"time"
+
+	"github.com/tenta-browser/tenta-dns/log"
 
 	"github.com/sirupsen/logrus"
 )
@@ -126,6 +127,7 @@ func countlimits(l *Limiter) {
 func updatecounts(l *Limiter, cl *sync.WaitGroup) {
 	cl.Add(1)
 	defer cl.Done()
+	st := time.Now()
 	limits := make(map[string]uint64)
 	slices := uint64(0)
 	for _, ptr := range l.tables {
@@ -153,4 +155,5 @@ func updatecounts(l *Limiter, cl *sync.WaitGroup) {
 	l.limitLock.Lock()
 	defer l.limitLock.Unlock()
 	l.limits = limits
+	l.lg.Infof("Rate counter aggregation took %v", time.Now().Sub(st))
 }
