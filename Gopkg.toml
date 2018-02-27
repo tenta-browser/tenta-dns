@@ -28,7 +28,7 @@
 
 [[constraint]]
   name = "github.com/muesli/cache2go"
-  version = "0.1.0"
+  branch = "master"
 
 [[constraint]]
   name = "github.com/oschwald/maxminddb-golang"
