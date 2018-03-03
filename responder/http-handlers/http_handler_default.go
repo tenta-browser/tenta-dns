@@ -23,16 +23,16 @@
 package http_handlers
 
 import (
+	"net/http"
+
 	"github.com/tenta-browser/tenta-dns/common"
 	"github.com/tenta-browser/tenta-dns/runtime"
-	"net/http"
 
 	"github.com/sirupsen/logrus"
 )
 
 func HandleHTTPDefault(cfg runtime.NSnitchConfig, rt *runtime.Runtime, lgr *logrus.Entry) httpHandler {
 	return wrapExtendedHttpHandler(rt, lgr, "error", func(w http.ResponseWriter, r *http.Request, lg *logrus.Entry) {
-		w.WriteHeader(http.StatusNotFound)
 		data := &common.DefaultJSONObject{
 			Status:  "ERROR",
 			Type:    "TENTA_NSNITCH",
@@ -42,6 +42,7 @@ func HandleHTTPDefault(cfg runtime.NSnitchConfig, rt *runtime.Runtime, lgr *logr
 		}
 		lg.Debug("404 Not Found")
 		extraHeaders(cfg, w, r)
+		w.WriteHeader(http.StatusNotFound)
 		mustMarshall(w, data, lg)
 	})
 }

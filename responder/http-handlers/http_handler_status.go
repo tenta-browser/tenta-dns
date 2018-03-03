@@ -25,10 +25,11 @@ package http_handlers
 import (
 	"encoding/binary"
 	"fmt"
-	"github.com/tenta-browser/tenta-dns/common"
-	"github.com/tenta-browser/tenta-dns/runtime"
 	"net/http"
 	"time"
+
+	"github.com/tenta-browser/tenta-dns/common"
+	"github.com/tenta-browser/tenta-dns/runtime"
 
 	"github.com/sirupsen/logrus"
 )
@@ -46,14 +47,13 @@ func HandleHTTPStatus(cfg runtime.NSnitchConfig, rt *runtime.Runtime, lgr *logru
 				"geoupdate": "unset",
 			},
 			Message: "System Okay",
-			Code:    200,
+			Code:    http.StatusOK,
 		}
 		if err != nil {
 			data.Status = "Error"
 			data.Data.(map[string]string)["database"] = "failed"
 			data.Message = "System Error"
-			data.Code = 500
-			w.WriteHeader(http.StatusInternalServerError)
+			data.Code = http.StatusInternalServerError
 		} else {
 			runfor = uint32(time.Now().Unix()) - uint32(binary.LittleEndian.Uint64(startTimeBytes))
 			data.Data.(map[string]string)["uptime"] = fmt.Sprintf("%d", runfor)
@@ -63,6 +63,7 @@ func HandleHTTPStatus(cfg runtime.NSnitchConfig, rt *runtime.Runtime, lgr *logru
 			}
 		}
 		extraHeaders(cfg, w, r)
+		w.WriteHeader(data.Code)
 		mustMarshall(w, data, lg)
 	})
 }
