@@ -21,10 +21,10 @@
 @ECHO OFF
 
 FOR /F "tokens=* USEBACKQ" %%F IN (`git rev-parse --short HEAD`) DO (
-    SET version="development@%%F"
+    SET version=development@%%F
 )
 
 echo "Compiling %version%"
 
-go install -ldflags "-X main.version=$version" -v github.com/tenta-browser/tenta-dns
-go install -ldflags "-X main.version=$version" -v github.com/tenta-browser/tenta-dns/stresser
+go install -ldflags "-X main.version=%version%" -v github.com/tenta-browser/tenta-dns
+go install -ldflags "-X main.version=%version%" -v github.com/tenta-browser/tenta-dns/stresser
