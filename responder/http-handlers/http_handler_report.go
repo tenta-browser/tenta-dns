@@ -63,15 +63,14 @@ func HandleHTTPReport(cfg runtime.NSnitchConfig, rt *runtime.Runtime, d *runtime
 				lg.Warnf("DB Error: %s", err.Error())
 				data.Status = "ERROR"
 				if err == leveldb.ErrNotFound {
-					w.WriteHeader(http.StatusNotFound)
 					data.Message = "Not Found"
-					data.Code = 404
+					data.Code = http.StatusNotFound
 				} else {
-					w.WriteHeader(http.StatusInternalServerError)
 					data.Message = "Internal Error"
-					data.Code = 500
+					data.Code = http.StatusInternalServerError
 				}
 				extraHeaders(cfg, w, r)
+				w.WriteHeader(data.Code)
 				mustMarshall(w, data, lg)
 				return
 			}
