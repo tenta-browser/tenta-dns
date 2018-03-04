@@ -74,6 +74,7 @@ type NSnitchConfig struct {
 	WordListPath string
 	CorsDomains  []string
 	Blacklists   []string
+	WellKnowns	 map[string]*WellKnown
 	BlacklistTTL int64
 }
 
@@ -117,6 +118,13 @@ type NodeConfig struct {
 	AS         uint
 	Org        string
 	TimeZone   string
+}
+
+type WellKnown struct {
+	Path		string
+	Body		string
+	Base64		bool
+	MimeType	string
 }
 
 type ConfigHolder struct {
