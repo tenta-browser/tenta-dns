@@ -295,42 +295,32 @@ func handleSnitch(cfg runtime.NSnitchConfig, rt *runtime.Runtime, d *runtime.Ser
 			//m.Extra = append(m.Extra, t)
 		}
 		writeCAA := func() {
-			if len(d.CAAIodef) > 0 {
-				iodef := &dns.CAA{
-					Tag: "iodef",
-					Value: d.CAAIodef,
+			makeCaa := func(tag, value string) *dns.CAA {
+				return &dns.CAA{
+					Hdr: dns.RR_Header{Name: queried, Rrtype: dns.TypeCAA, Class: dns.ClassINET, Ttl: 0},
+					Tag: tag,
+					Value: value,
 				}
-				m.Answer = append(m.Answer, iodef)
+			}
+
+			if len(d.CAAIodef) > 0 {
+				for _, iname := range d.CAAIodef {
+					m.Answer = append(m.Answer, makeCaa("iodef", iname))
+				}
 			}
 			if len(d.CAAIssue) > 0 {
 				for _, iname := range d.CAAIssue {
-					issue := &dns.CAA{
-						Tag: "issue",
-						Value: iname,
-					}
-					m.Answer = append(m.Answer, issue)
+					m.Answer = append(m.Answer, makeCaa("issue", iname))
 				}
 			} else {
-				issue := &dns.CAA{
-					Tag: "issue",
-					Value: ";",
-				}
-				m.Answer = append(m.Answer, issue)
+				m.Answer = append(m.Answer, makeCaa("issue", ";"))
 			}
-			if len(d.CAAIssueWild) > 0 {
-				for _, iname := range d.CAAIssue {
-					issue := &dns.CAA{
-						Tag: "issuewild",
-						Value: iname,
-					}
-					m.Answer = append(m.Answer, issue)
+			if len(d.CAAIWild) > 0 {
+				for _, iname := range d.CAAIWild {
+					m.Answer = append(m.Answer, makeCaa("issuewild", iname))
 				}
 			} else {
-				issue := &dns.CAA{
-					Tag: "issuewild",
-					Value: ";",
-				}
-				m.Answer = append(m.Answer, issue)
+				m.Answer = append(m.Answer, makeCaa("issuewild", ";"))
 			}
 			skipdb = true
 		}
