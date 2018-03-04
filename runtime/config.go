@@ -105,6 +105,9 @@ type ServerDomain struct {
 	DnsUdpPort  int
 	DnsTcpPort  int
 	DnsTlsPort  int
+	CAAIodef	[]string
+	CAAIssue	[]string
+	CAAIWild	[]string
 }
 
 type NodeConfig struct {

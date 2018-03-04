@@ -294,6 +294,36 @@ func handleSnitch(cfg runtime.NSnitchConfig, rt *runtime.Runtime, d *runtime.Ser
 			m.Answer = append(m.Answer, serverIp)
 			//m.Extra = append(m.Extra, t)
 		}
+		writeCAA := func() {
+			makeCaa := func(tag, value string) *dns.CAA {
+				return &dns.CAA{
+					Hdr: dns.RR_Header{Name: queried, Rrtype: dns.TypeCAA, Class: dns.ClassINET, Ttl: 0},
+					Tag: tag,
+					Value: value,
+				}
+			}
+
+			if len(d.CAAIodef) > 0 {
+				for _, iname := range d.CAAIodef {
+					m.Answer = append(m.Answer, makeCaa("iodef", iname))
+				}
+			}
+			if len(d.CAAIssue) > 0 {
+				for _, iname := range d.CAAIssue {
+					m.Answer = append(m.Answer, makeCaa("issue", iname))
+				}
+			} else {
+				m.Answer = append(m.Answer, makeCaa("issue", ";"))
+			}
+			if len(d.CAAIWild) > 0 {
+				for _, iname := range d.CAAIWild {
+					m.Answer = append(m.Answer, makeCaa("issuewild", iname))
+				}
+			} else {
+				m.Answer = append(m.Answer, makeCaa("issuewild", ";"))
+			}
+			skipdb = true
+		}
 
 		switch r.Question[0].Qtype {
 		case dns.TypeANY:
@@ -301,6 +331,7 @@ func handleSnitch(cfg runtime.NSnitchConfig, rt *runtime.Runtime, d *runtime.Ser
 			writeSOA()
 			writeNS()
 			writeA()
+			writeCAA()
 			break
 		case dns.TypeSOA:
 			rt.Stats.Count("dns:queries:type:soa")
@@ -317,6 +348,10 @@ func handleSnitch(cfg runtime.NSnitchConfig, rt *runtime.Runtime, d *runtime.Ser
 			rt.Stats.Count("dns:queries:internal:a")
 			writeA()
 			break
+		case dns.TypeCAA:
+			rt.Stats.Count("dns:queries:internal:caa")
+			writeCAA()
+			break;
 		default:
 			break
 		}
