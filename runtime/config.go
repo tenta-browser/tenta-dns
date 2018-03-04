@@ -37,7 +37,6 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/sirupsen/logrus"
-	"encoding/base64"
 )
 
 const PORT_UNSET = 0
