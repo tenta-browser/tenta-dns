@@ -21,8 +21,15 @@ timezone="UTC"
 redirectmode="wordlist"
 wordlistpath="/etc/nsnitch/words.txt"
 
+[[wellknowns]]
+  [wellknown]
+  path="pki-validation/ABC123.txt"
+  body="ABC123 certificate.authority.net xzy987"
+  base64=false
+  mimetype="text/plain"
+
 # The list of domains to bind to
-[domaains]
+[domains]
     [domains.domain1]
     hostname="example.org"
     ipv4="127.0.0.2"
