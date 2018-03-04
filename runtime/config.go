@@ -37,6 +37,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/sirupsen/logrus"
+	"encoding/base64"
 )
 
 const PORT_UNSET = 0
@@ -74,6 +75,7 @@ type NSnitchConfig struct {
 	WordListPath string
 	CorsDomains  []string
 	Blacklists   []string
+	WellKnowns	 []WellKnown
 	BlacklistTTL int64
 }
 
@@ -117,6 +119,13 @@ type NodeConfig struct {
 	AS         uint
 	Org        string
 	TimeZone   string
+}
+
+type WellKnown struct {
+	Path		string
+	Body		string
+	Base64		bool
+	MimeType	string
 }
 
 type ConfigHolder struct {

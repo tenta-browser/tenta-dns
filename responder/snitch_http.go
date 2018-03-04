@@ -33,6 +33,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/sirupsen/logrus"
+	"encoding/base64"
 )
 
 func SnitchHTTPServer(cfg runtime.NSnitchConfig, rt *runtime.Runtime, v4 bool, net string, d *runtime.ServerDomain) {
@@ -71,6 +72,22 @@ func SnitchHTTPServer(cfg runtime.NSnitchConfig, rt *runtime.Runtime, v4 bool, n
 	router.HandleFunc("/api/v1/blacklist", httpPanicWrap(handlers.HandleHTTPBLLookup(cfg, rt, lg), pchan)).Methods("GET").Host(d.HostName)
 	router.HandleFunc("/api/v1/blacklist/{foreign_ip}", httpPanicWrap(handlers.HandleHTTPBLLookup(cfg, rt, lg), pchan)).Methods("GET").Host(d.HostName)
 	router.HandleFunc("/api/v1/stats", httpPanicWrap(handlers.HandleHTTPStatsLookup(cfg, rt, lg), pchan)).Methods("GET").Host(d.HostName)
+
+	for _, wk := range cfg.WellKnowns {
+		var b []byte
+		if wk.Base64 {
+			var err error
+			b, err = base64.StdEncoding.DecodeString(wk.Body)
+			if err != nil {
+				lg.Warnf("Unable to decode body from well known %s: %s", wk.Path, err)
+				continue
+			}
+		} else {
+			b = []byte(wk.Body)
+		}
+		lg.Infof("Installing well known %s", wk.Path)
+		router.HandleFunc(fmt.Sprintf("/.well-known/%s", wk.Path), httpPanicWrap(handlers.HandleHTTPWellKnown(cfg, rt, lg, wk.Path, b, wk.MimeType), pchan)).Methods("GET").Host(d.HostName)
+	}
 
 	if net == "http" {
 		serveHTTP(rt, d, ip, port, router, lg, pchan)
