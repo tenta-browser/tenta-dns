@@ -74,7 +74,7 @@ type NSnitchConfig struct {
 	WordListPath string
 	CorsDomains  []string
 	Blacklists   []string
-	WellKnowns	 []WellKnown
+	WellKnowns	 map[string]*WellKnown
 	BlacklistTTL int64
 }
 

@@ -21,16 +21,17 @@ timezone="UTC"
 redirectmode="wordlist"
 wordlistpath="/etc/nsnitch/words.txt"
 # Provide values for "/.well-known" responses
-[[wellknowns]]
-  [wellknown]
-  # The path under, "/.well-known/", this expands to "/.well-known/pki-validation/ABC123.txt"
-  path="pki-validation/ABC123.txt"
-  # The literal body to serve, optionally Base64 encoded
-  body="ABC123 certificate.authority.net xzy987"
-  # Whether the body is base64 encoded
-  base64=false
-  # The mime type to use when serving this response
-  mimetype="text/plain"
+
+[wellknowns]
+    [wellknowns.ABC123]
+    # The path under, "/.well-known/", this expands to "/.well-known/pki-validation/ABC123.txt"
+    path="pki-validation/ABC123.txt"
+    # The literal body to serve, optionally Base64 encoded
+    body="ABC123 certificate.authority.net xzy987"
+    # Whether the body is base64 encoded
+    base64=false
+    # The mime type to use when serving this response
+    mimetype="text/plain"
 
 # The list of domains to bind to
 [domains]
