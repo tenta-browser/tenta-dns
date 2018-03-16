@@ -74,10 +74,10 @@ type NSnitchConfig struct {
 	WordListPath string
 	CorsDomains  []string
 	Blacklists   []string
-	WellKnowns	 map[string]*WellKnown
+	WellKnowns   map[string]*WellKnown
 	BlacklistTTL int64
-	DnsReplyv4 string
-	DnsReplyv6 string
+	DnsReplyv4   []string
+	DnsReplyv6   []string
 }
 
 type RecursorConfig struct {
@@ -107,9 +107,9 @@ type ServerDomain struct {
 	DnsUdpPort  int
 	DnsTcpPort  int
 	DnsTlsPort  int
-	CAAIodef	[]string
-	CAAIssue	[]string
-	CAAIWild	[]string
+	CAAIodef    []string
+	CAAIssue    []string
+	CAAIWild    []string
 }
 
 type NodeConfig struct {
@@ -126,10 +126,10 @@ type NodeConfig struct {
 }
 
 type WellKnown struct {
-	Path		string
-	Body		string
-	Base64		bool
-	MimeType	string
+	Path     string
+	Body     string
+	Base64   bool
+	MimeType string
 }
 
 type ConfigHolder struct {
