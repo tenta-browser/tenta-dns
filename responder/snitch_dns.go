@@ -109,7 +109,7 @@ func handleSnitch(cfg runtime.NSnitchConfig, rt *runtime.Runtime, d *runtime.Ser
 	return func(w dns.ResponseWriter, r *dns.Msg) {
 		var (
 			v4       bool
-			serverIp dns.RR
+			serverIp []dns.RR
 			//str       string
 			a       net.IP
 			queried string
@@ -185,14 +185,18 @@ func handleSnitch(cfg runtime.NSnitchConfig, rt *runtime.Runtime, d *runtime.Ser
 		}
 
 		if v4 {
-			serverIp = &dns.A{
-				Hdr: dns.RR_Header{Name: queried, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 0},
-				A:   net.ParseIP(d.IPv4),
+			for _, confA := range cfg.DnsReplyv4 {
+				serverIp = append(serverIp, &dns.A{
+					Hdr: dns.RR_Header{Name: queried, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 0},
+					A:   net.ParseIP(confA),
+				})
 			}
 		} else {
-			serverIp = &dns.AAAA{
-				Hdr:  dns.RR_Header{Name: queried, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: 0},
-				AAAA: net.ParseIP(d.IPv6),
+			for _, confAAAA := range cfg.DnsReplyv6 {
+				serverIp = append(serverIp, &dns.AAAA{
+					Hdr:  dns.RR_Header{Name: queried, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: 0},
+					AAAA: net.ParseIP(confAAAA),
+				})
 			}
 		}
 
@@ -291,14 +295,14 @@ func handleSnitch(cfg runtime.NSnitchConfig, rt *runtime.Runtime, d *runtime.Ser
 			skipdb = true
 		}
 		writeA := func() {
-			m.Answer = append(m.Answer, serverIp)
+			m.Answer = append(m.Answer, serverIp...)
 			//m.Extra = append(m.Extra, t)
 		}
 		writeCAA := func() {
 			makeCaa := func(tag, value string) *dns.CAA {
 				return &dns.CAA{
-					Hdr: dns.RR_Header{Name: queried, Rrtype: dns.TypeCAA, Class: dns.ClassINET, Ttl: 0},
-					Tag: tag,
+					Hdr:   dns.RR_Header{Name: queried, Rrtype: dns.TypeCAA, Class: dns.ClassINET, Ttl: 0},
+					Tag:   tag,
 					Value: value,
 				}
 			}
@@ -351,7 +355,7 @@ func handleSnitch(cfg runtime.NSnitchConfig, rt *runtime.Runtime, d *runtime.Ser
 		case dns.TypeCAA:
 			rt.Stats.Count("dns:queries:internal:caa")
 			writeCAA()
-			break;
+			break
 		default:
 			break
 		}

@@ -29,7 +29,7 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"unicode"
+	"strings"
 
 	"github.com/tenta-browser/tenta-dns/common"
 	"github.com/tenta-browser/tenta-dns/log"
@@ -83,7 +83,7 @@ func NewWordListRandomizer(cfg runtime.NSnitchConfig) Randomizer {
 		}
 		buffer.Write(part)
 		if !prefix {
-			rnd.wordlist = append(rnd.wordlist, buffer.String())
+			rnd.wordlist = append(rnd.wordlist, strings.ToLower(buffer.String()))
 			buffer.Reset()
 		}
 	}
@@ -118,17 +118,17 @@ func (rnd WordRandomizer) Rand() (string, error) {
 			}
 		}
 		word := rnd.wordlist[common.RandInt(rnd.wordlistlen)]
-		switch common.RandInt(4) {
-		case 0, 1, 2:
-			for i, v := range word {
-				word = string(unicode.ToUpper(v)) + word[i+1:]
-				break
-			}
-			break
-		default:
-			// Do nothing
-			break
-		}
+		// switch common.RandInt(4) {
+		// case 0, 1, 2:
+		// 	for i, v := range word {
+		// 		word = string(unicode.ToUpper(v)) + word[i+1:]
+		// 		break
+		// 	}
+		// 	break
+		// default:
+		// 	// Do nothing
+		// 	break
+		// }
 		buffer.WriteString(word)
 	}
 	return buffer.String(), nil
