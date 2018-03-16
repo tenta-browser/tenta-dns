@@ -76,6 +76,8 @@ type NSnitchConfig struct {
 	Blacklists   []string
 	WellKnowns	 map[string]*WellKnown
 	BlacklistTTL int64
+	DnsReplyv4 string
+	DnsReplyv6 string
 }
 
 type RecursorConfig struct {

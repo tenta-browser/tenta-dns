@@ -187,12 +187,12 @@ func handleSnitch(cfg runtime.NSnitchConfig, rt *runtime.Runtime, d *runtime.Ser
 		if v4 {
 			serverIp = &dns.A{
 				Hdr: dns.RR_Header{Name: queried, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 0},
-				A:   net.ParseIP(d.IPv4),
+				A:   net.ParseIP(cfg.DnsReplyv4),
 			}
 		} else {
 			serverIp = &dns.AAAA{
 				Hdr:  dns.RR_Header{Name: queried, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: 0},
-				AAAA: net.ParseIP(d.IPv6),
+				AAAA: net.ParseIP(cfg.DnsReplyv6),
 			}
 		}
 
