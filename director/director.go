@@ -24,12 +24,6 @@ package director
 
 import (
 	"fmt"
-	"github.com/tenta-browser/tenta-dns/anycast"
-	"github.com/tenta-browser/tenta-dns/common"
-	"github.com/tenta-browser/tenta-dns/log"
-	"github.com/tenta-browser/tenta-dns/netinterface"
-	"github.com/tenta-browser/tenta-dns/responder"
-	"github.com/tenta-browser/tenta-dns/runtime"
 	"net"
 	"os"
 	"path/filepath"
@@ -37,6 +31,13 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/tenta-browser/tenta-dns/anycast"
+	"github.com/tenta-browser/tenta-dns/common"
+	"github.com/tenta-browser/tenta-dns/log"
+	"github.com/tenta-browser/tenta-dns/netinterface"
+	"github.com/tenta-browser/tenta-dns/responder"
+	"github.com/tenta-browser/tenta-dns/runtime"
 
 	"github.com/coreos/go-systemd/daemon"
 	"github.com/sirupsen/logrus"
@@ -100,13 +101,14 @@ func (dir *Director) doOrchestrate(systemd bool) {
 		base := filepath.Base(ncfg.ConfigFile)
 		for _, s := range domainLister(ncfg.Domains, true, true) {
 			id := fmt.Sprintf("nsnitch+%s%s", s.id, base)
+			thisCfg := ncfg
 			players[id] = newPlayer(id, failures, func(s startdata) starter {
 				return func() {
 					dir.r.AddService()
 					if s.net == "http" || s.net == "https" {
-						responder.SnitchHTTPServer(ncfg, dir.r, s.ipv4, s.net, s.d)
+						responder.SnitchHTTPServer(thisCfg, dir.r, s.ipv4, s.net, s.d)
 					} else {
-						responder.SnitchDNSServer(ncfg, dir.r, s.ipv4, s.net, s.d)
+						responder.SnitchDNSServer(thisCfg, dir.r, s.ipv4, s.net, s.d)
 					}
 				}
 			}(s), nil)
