@@ -1,4 +1,4 @@
-dnsconf="f:\\mk\\repos\\tenta-dns-gh-fork\\etc\\config.toml"
+dnsconf="/etc/nsnitch/monitor.toml"
 ip="127.0.0.1"
 domain="monitor.example.com"
 #cert="/etc/nsnitch/certs/example.crt"
