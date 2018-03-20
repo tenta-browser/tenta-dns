@@ -1,0 +1,8 @@
+dnsconf="f:\\mk\\repos\\tenta-dns-gh-fork\\etc\\config.toml"
+ip="127.0.0.1"
+domain="monitor.example.com"
+#cert="/etc/nsnitch/certs/example.crt"
+#key="/etc/nsnitch/certs/example.key"
+target=["tenta.com", "github.com", "example.com"]
+timeout=100
+systemd=false

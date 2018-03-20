@@ -30,3 +30,4 @@ echo "Compiling version $version"
 
 go install -ldflags "-X main.version=$version" -v github.com/tenta-browser/tenta-dns
 go install -ldflags "-X main.version=$version" -v github.com/tenta-browser/tenta-dns/stresser
+go install -ldflags "-X main.version=$version" -v github.com/tenta-browser/tenta-dns/monitor
