@@ -100,21 +100,29 @@ func parseDNSConfig(rt *monitorRuntime, holder runtime.ConfigHolder) error {
 
 func pingdomWrapper(rt *monitorRuntime) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		var response string
 		rt.m.Lock()
 		defer rt.m.Unlock()
+
 		for i := CHECK_HISTORY_LENGTH - 1; i >= 0; i-- {
 			if rt.r[i] == false {
-				w.Write([]byte(fmt.Sprintf("<pingdom_http_custom_check>\n" +
+				response = fmt.Sprintf("<pingdom_http_custom_check>\n" +
 					"    <status>FAIL</status>\n" +
 					"    <response_time>1</response_time>\n" +
-					"</pingdom_http_custom_check>")))
+					"</pingdom_http_custom_check>")
 				return
 			}
 		}
-		w.Write([]byte(fmt.Sprintf("<pingdom_http_custom_check>\n" +
+		response = fmt.Sprintf("<pingdom_http_custom_check>\n" +
 			"    <status>OK</status>\n" +
 			"    <response_time>1</response_time>\n" +
-			"</pingdom_http_custom_check>")))
+			"</pingdom_http_custom_check>")
+
+		w.Header().Set("Content-Disposition", "attachment; filename=status.xml")
+		w.Header().Set("Content-Type", "text/xml")
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(response)))
+		w.Write([]byte(response))
+
 	}
 }
 
