@@ -37,6 +37,7 @@ const (
 var (
 	config  = flag.String("config", "", "Path to the configuration file for monitoring service")
 	dnsconf = flag.String("dnsconf", "", "Path to Tenta DNS main configuration file (Tenta DNS launch parameter)")
+	exclude = flag.String("exclude", "", "Comma separated list of IPs to exclude from testing")
 	ip      = flag.String("ip", "", "Local IP address to bind service")
 	domain  = flag.String("domain", "", "TLS domain name to serve API from")
 	cert    = flag.String("cert", "", "Path to TLS certificate file for domain")
@@ -50,7 +51,7 @@ var version string
 
 type monitorConfig struct {
 	DnsConf, Ip, Domain, Cert, Key string
-	Target                         []string
+	Target, Exclude                []string
 	Timeout                        int
 	Systemd                        bool
 }
@@ -68,9 +69,21 @@ type monitorRuntime struct {
 	r [20]bool
 }
 
+func checkExcludedIP(rt *monitorRuntime, ip string) bool {
+	for _, eip := range rt.c.Exclude {
+		if eip == ip {
+			return true
+		}
+	}
+	return false
+}
+
 func parseDNSConfig(rt *monitorRuntime, holder runtime.ConfigHolder) error {
 	for _, r := range holder.Recursors {
 		for _, d := range r.Domains {
+			if checkExcludedIP(rt, d.IPv4) {
+				continue
+			}
 			if d.DnsTcpPort != runtime.PORT_UNSET {
 				rt.d = append(rt.d, &dnsInstance{d.IPv4, "tcp", d.HostName, d.DnsTcpPort})
 			}
@@ -202,6 +215,7 @@ func main() {
 
 		cfg = &monitorConfig{
 			DnsConf: *dnsconf,
+			Exclude: strings.Split(*exclude, ","),
 			Ip:      *ip,
 			Domain:  *domain,
 			Cert:    *cert,

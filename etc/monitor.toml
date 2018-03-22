@@ -1,8 +1,15 @@
+# path to the main Tenta DNS config
 dnsconf="/etc/nsnitch/monitor.toml"
+# exclude these IPs from testing (if set up, anycast IPs go here)
+exclude=[]
+# HTTP checkup API configuration
 ip="127.0.0.1"
 domain="monitor.example.com"
 #cert="/etc/nsnitch/certs/example.crt"
 #key="/etc/nsnitch/certs/example.key"
+# domains to test in each period
 target=["tenta.com", "github.com", "example.com"]
+# expressed in ms, timeout is the maximum time a DNS test can run before it gets invalidated
 timeout=100
+# whether the service was started via systemd
 systemd=false
