@@ -104,11 +104,11 @@ func pingdomWrapper(rt *monitorRuntime) http.HandlerFunc {
 		defer rt.m.Unlock()
 		for i := CHECK_HISTORY_LENGTH - 1; i >= 0; i-- {
 			if rt.r[i] == false {
-				w.Write([]byte("<pingdom_http_custom_check><status>FAIL</status></pingdom_http_custom_check>"))
+				w.Write([]byte("<pingdom_http_custom_check><status>FAIL</status><response_time>1</response_time></pingdom_http_custom_check>"))
 				return
 			}
 		}
-		w.Write([]byte("<pingdom_http_custom_check><status>OK</status></pingdom_http_custom_check>"))
+		w.Write([]byte("<pingdom_http_custom_check><status>OK</status><response_time>1</response_time></pingdom_http_custom_check>"))
 	}
 }
 
