@@ -189,9 +189,25 @@ func testDNS(rt *monitorRuntime, log *logrus.Entry) {
 					break
 				}
 				if rtt > time.Duration(rt.c.Timeout)*time.Millisecond {
-					log.Warnf("Querying %s/%s about %s exceeded rtt threshold [%v]. Failure notice sent.", d.ip, d.net, testDomain, rtt)
-					allOK = false
-					break
+					log.Warnf("Querying %s/%s about %s exceeded rtt threshold [%v]. Retrying.", d.ip, d.net, testDomain, rtt)
+
+					r, rtt, e = c.Exchange(m, fmt.Sprintf("%s:%d", d.ip, d.port))
+
+					if e != nil {
+						log.Warnf("An error occured during DNS exchange. Setup: %s/%s [%s]. Cause [%s]", d.ip, d.net, testDomain, e.Error())
+						allOK = false
+						break
+					}
+					if r.Rcode != dns.RcodeSuccess {
+						log.Warnf("DNS query %s/%s about %s returned non-success rcode [%s]. Failure notice sent.", d.ip, d.net, testDomain, dns.RcodeToString[r.Rcode])
+						allOK = false
+						break
+					}
+					if rtt > time.Duration(rt.c.Timeout)*time.Millisecond {
+						log.Warnf("Querying %s/%s about %s exceeded rtt threshold [%v]. Failure notice sent.", d.ip, d.net, testDomain, rtt)
+						allOK = false
+						break
+					}
 				}
 			}
 			wg.Done()
