@@ -98,6 +98,20 @@ func parseDNSConfig(rt *monitorRuntime, holder runtime.ConfigHolder) error {
 	return nil
 }
 
+func pingdomWrapper(rt *monitorRuntime) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		rt.m.Lock()
+		defer rt.m.Unlock()
+		for i := CHECK_HISTORY_LENGTH - 1; i >= 0; i-- {
+			if rt.r[i] == false {
+				w.Write([]byte("<pingdom_http_custom_check><status>FAIL</status></pingdom_http_custom_check>"))
+				return
+			}
+		}
+		w.Write([]byte("<pingdom_http_custom_check><status>OK</status></pingdom_http_custom_check>"))
+	}
+}
+
 func sitrepWrapper(rt *monitorRuntime) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		rt.m.Lock()
@@ -242,6 +256,7 @@ func main() {
 	rt.t = time.NewTicker(TESTING_PERIOD * time.Second)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/checkup", sitrepWrapper(rt))
+	mux.HandleFunc("/api/v1/pingdom", pingdomWrapper(rt))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	})
