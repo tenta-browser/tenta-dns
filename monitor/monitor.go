@@ -106,7 +106,7 @@ func testDNS(rt *monitorRuntime, log *logrus.Entry) {
 		wg.Add(1)
 		d := _d
 		go func() {
-			log.Info("Launching resolve for %s/%s", d.ip, d.net)
+			//log.Infof("Launching resolve for %s/%s", d.ip, d.net)
 			c := dns.Client{
 				Net:            d.net,
 				SingleInflight: true,
@@ -143,12 +143,12 @@ func testDNS(rt *monitorRuntime, log *logrus.Entry) {
 					continue
 				}
 				if r.Rcode != dns.RcodeSuccess {
-					log.Warnf("DNS query %s/%s about %s returned non-success rcode. Failure notice sent.", d.ip, d.net, testDomain)
+					log.Warnf("DNS query %s/%s about %s returned non-success rcode [%s]. Failure notice sent.", d.ip, d.net, testDomain, dns.RcodeToString[r.Rcode])
 					allOK = false
 					break
 				}
 				if rtt > time.Duration(rt.c.Timeout)*time.Millisecond {
-					log.Warnf("Querying %s/%s about %s exceeded rtt threshold. Failure notice sent.", d.ip, d.net, testDomain)
+					log.Warnf("Querying %s/%s about %s exceeded rtt threshold [%v]. Failure notice sent.", d.ip, d.net, testDomain, rtt)
 					allOK = false
 					break
 				}
@@ -157,6 +157,12 @@ func testDNS(rt *monitorRuntime, log *logrus.Entry) {
 		}()
 	}
 	wg.Wait()
+
+	if allOK {
+		log.Infof("SUCCESS for this round")
+	} else {
+		log.Infof("FAILURE for this round")
+	}
 
 	rt.m.Lock()
 	defer rt.m.Unlock()
