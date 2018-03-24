@@ -140,6 +140,19 @@ func sitrepWrapper(rt *monitorRuntime) http.HandlerFunc {
 	}
 }
 
+func createDialer(ip, network string) *net.Dialer {
+	switch network {
+	case "udp":
+		return &net.Dialer{LocalAddr: &net.UDPAddr{IP: net.ParseIP(ip)}}
+		break
+	case "tcp":
+	case "tcp-tls":
+		return &net.Dialer{LocalAddr: &net.TCPAddr{IP: net.ParseIP(ip)}}
+		break
+	}
+	return nil
+}
+
 func testDNS(rt *monitorRuntime, log *logrus.Entry) {
 	allOK := true
 	wg := &sync.WaitGroup{}
@@ -152,7 +165,9 @@ func testDNS(rt *monitorRuntime, log *logrus.Entry) {
 				Net:            d.net,
 				SingleInflight: true,
 			}
-
+			if di := createDialer(rt.c.Ip, d.net); d != nil {
+				c.Dialer = di
+			}
 			if d.net == "tcp-tls" {
 				c.TLSConfig = &tls.Config{
 					MinVersion:               tls.VersionTLS12,
