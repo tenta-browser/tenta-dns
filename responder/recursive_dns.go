@@ -1107,7 +1107,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 				reply, tw, err = q.simpleResolve(token, iteratedTargetServer, dns.TypeNS, 0)
 				q.timeWasted += tw
 				if err != nil {
-					if ind < len(finalTargetServers)-1 {
+					if ind < len(finalTargetServers)-1 && err.errorCode != errorDNSSECBogus {
 						q.debug("Simpleresolve failed on primary address, falling back.\n")
 						continue
 					}
