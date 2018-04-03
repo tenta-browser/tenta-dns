@@ -367,8 +367,7 @@ func setupDNSClient(client *dns.Client, port *string, target string, tlsCapabili
 			ip := net.ParseIP(target)
 			if ip.To4() != nil {
 				PTRTarget := formatIPAddressReverse(ip)
-				targetPTR, _tw, err := retrieveCache(provider, PTRTarget+".IN-ADDR.ARPA.", dns.TypePTR)
-				tw += _tw
+				targetPTR, _, err := retrieveCache(provider, PTRTarget+".IN-ADDR.ARPA.", dns.TypePTR)
 				if err == nil {
 					if ptr, ok := targetPTR[0].(*dns.PTR); ok {
 						hostname = ptr.Ptr
@@ -384,6 +383,7 @@ func setupDNSClient(client *dns.Client, port *string, target string, tlsCapabili
 		*port = ":853"
 		hostname = strings.TrimRight(hostname, ".")
 		client.TLSConfig = common.TLSConfigDNS()
+		client.TLSConfig.ServerName = hostname
 		needsTCP = true
 
 	} else if needsTCP {
