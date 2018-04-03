@@ -115,7 +115,7 @@ var (
 	targetNSName         = func() *string { t := ""; return &t }()    //flag.String("nshostname", "", "Resolver name to use in client mode")
 	certCache            = func() *string { t := ""; return &t }()    //flag.String("certcache", "", "Use the specified path for local certificate cache")
 	dnssecEnabled        = func() *bool { t := false; return &t }()   //flag.Bool("dnssec", false, "starts server in dnssec enabled mode")
-	forgivingDNSSECCheck = true
+	forgivingDNSSECCheck = false
 	preferredProtocol    = "udp"
 	/// TODO -- externalize as a config directive the ips of root servers (both iana and opennic)
 	opennicRoots    = []*rootServer{&rootServer{"ns2.opennic.glue", "161.97.219.84", "2001:470:4212:10:0:100:53:1"}}
@@ -600,17 +600,19 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16, sugges
 		k := make([]*dns.DNSKEY, 0)
 		krr := make([]dns.RR, 0)
 		r := make([]*dns.RRSIG, 0)
+		soa := &dns.SOA{}
 
 		hasSOA := false
 		for _, aut := range dsr.Ns {
-			if _, ok := aut.(*dns.SOA); ok {
+			ok := false
+			if soa, ok = aut.(*dns.SOA); ok {
 				hasSOA = true
 				break
 			}
 		}
 
 		if len(dsr.Answer) == 0 && hasSOA {
-			currentLevel = strings.Join(strings.Split(currentLevel, ".")[1:], ".")
+			currentLevel = soa.Hdr.Name
 			q.debug("Observed SOA on DNSKEY query. Reached bottom of the stack. means current level is in fact [%s]\n", currentLevel)
 			break /// without altering the chain of trust
 		}
