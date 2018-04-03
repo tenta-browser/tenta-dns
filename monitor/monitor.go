@@ -10,7 +10,6 @@
 package main
 
 import (
-	"crypto/tls"
 	"flag"
 	"fmt"
 	"net"
@@ -27,6 +26,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/tenta-browser/tenta-dns/log"
 	"github.com/tenta-browser/tenta-dns/runtime"
+	"github.com/tenta-browser/tenta-dns/common"
 )
 
 const (
@@ -169,23 +169,7 @@ func testDNS(rt *monitorRuntime, log *logrus.Entry) {
 				c.Dialer = di
 			}
 			if d.net == "tcp-tls" {
-				c.TLSConfig = &tls.Config{
-					MinVersion:               tls.VersionTLS12,
-					ServerName:               d.hostname,
-					CurvePreferences:         []tls.CurveID{tls.CurveP521, tls.CurveP384, tls.CurveP256},
-					PreferServerCipherSuites: false,
-					CipherSuites: []uint16{
-						tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,
-						tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,
-						tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
-						tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
-						tls.TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA,
-						tls.TLS_RSA_WITH_AES_256_GCM_SHA384,
-						tls.TLS_RSA_WITH_AES_128_GCM_SHA256,
-						tls.TLS_RSA_WITH_AES_256_CBC_SHA,
-						tls.TLS_RSA_WITH_3DES_EDE_CBC_SHA,
-					},
-				}
+				c.TLSConfig = common.TLSConfigDNS()
 			}
 
 			for _, testDomain := range rt.c.Target {
@@ -317,25 +301,10 @@ func main() {
 	}()
 
 	go func() {
-		tlscfg := &tls.Config{
-			MinVersion:               tls.VersionTLS10,
-			CurvePreferences:         []tls.CurveID{tls.CurveP521, tls.CurveP384, tls.CurveP256},
-			PreferServerCipherSuites: true,
-			CipherSuites: []uint16{
-				tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,
-				tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,
-				tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
-				tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
-				tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
-				tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
-				tls.TLS_RSA_WITH_AES_256_GCM_SHA384,
-				tls.TLS_RSA_WITH_AES_128_GCM_SHA256,
-			},
-		}
 		srv := &http.Server{
 			Addr:      net.JoinHostPort(rt.c.Ip, "443"),
 			Handler:   mux,
-			TLSConfig: tlscfg,
+			TLSConfig: common.TLSConfigModernHTTPS(),
 		}
 		if e := srv.ListenAndServeTLS(rt.c.Cert, rt.c.Key); e != nil {
 			lg.Errorf("HTTPS listener error [%s]", e.Error())

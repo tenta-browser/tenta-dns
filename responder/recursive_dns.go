@@ -42,6 +42,7 @@ import (
 	"github.com/miekg/dns"
 	"github.com/muesli/cache2go"
 	"github.com/sirupsen/logrus"
+	"github.com/tenta-browser/tenta-dns/common"
 )
 
 const (
@@ -382,26 +383,7 @@ func setupDNSClient(client *dns.Client, port *string, target string, tlsCapabili
 		client.Net = "tcp-tls"
 		*port = ":853"
 		hostname = strings.TrimRight(hostname, ".")
-		client.TLSConfig = &tls.Config{
-			MinVersion: tls.VersionTLS10,
-			ServerName: hostname,
-			//InsecureSkipVerify:       hostnameAvailable,
-			CurvePreferences:         []tls.CurveID{tls.CurveP521, tls.CurveP384, tls.CurveP256},
-			PreferServerCipherSuites: false,
-			/// add some cert debugging -> this is cert data save entry point (used solely for debugging now)
-			/// VerifyPeerCertificate: verifyServerCertificates,
-			CipherSuites: []uint16{
-				tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,
-				tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,
-				tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
-				tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
-				tls.TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA,
-				tls.TLS_RSA_WITH_AES_256_GCM_SHA384,
-				tls.TLS_RSA_WITH_AES_128_GCM_SHA256,
-				tls.TLS_RSA_WITH_AES_256_CBC_SHA,
-				tls.TLS_RSA_WITH_3DES_EDE_CBC_SHA,
-			},
-		}
+		client.TLSConfig = common.TLSConfigDNS()
 		needsTCP = true
 
 	} else if needsTCP {
@@ -1911,25 +1893,12 @@ func ServeDNS(cfg runtime.RecursorConfig, rt *runtime.Runtime, v4 bool, net stri
 				return
 			}
 
-			tlscfg := &tls.Config{
-				MinVersion:               tls.VersionTLS10,
-				Certificates:             []tls.Certificate{cert},
-				CurvePreferences:         []tls.CurveID{tls.CurveP521, tls.CurveP384, tls.CurveP256},
-				PreferServerCipherSuites: true,
-				CipherSuites: []uint16{
-					tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,
-					tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,
-					tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
-					tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
-					tls.TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA,
-					tls.TLS_RSA_WITH_AES_256_GCM_SHA384,
-					tls.TLS_RSA_WITH_AES_128_GCM_SHA256,
-					tls.TLS_RSA_WITH_AES_256_CBC_SHA,
-				},
-			}
+			tlscfg := common.TLSConfigDNS()
+			tlscfg.Certificates = []tls.Certificate{cert}
 
 			srv.Net = "tcp-tls"
 			srv.TLSConfig = tlscfg
+
 			if err := srv.ListenAndServe(); err != nil {
 				lg.Warnf("Failed to setup %s dns resolver on %s for %s: %s", net, addr, d.HostName, err.Error())
 			}
