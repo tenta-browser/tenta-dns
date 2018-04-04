@@ -36,6 +36,8 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/net/publicsuffix"
+
 	nlog "github.com/tenta-browser/tenta-dns/log"
 	"github.com/tenta-browser/tenta-dns/runtime"
 
@@ -545,14 +547,21 @@ func sliceRRtoDNSKEY(rr []dns.RR) []*dns.DNSKEY {
 }
 
 func inferCurrentLevel(queryString string, queryType uint16) string {
+	// fmt.Printf("\n\n\nDEB::INFER CURRENT LEVEL [%s]\n\n\n\n", queryString)
 	var currentLevel string
 	ending := ""
 	if dns.CountLabel(queryString) == 1 {
 		ending = "."
 	}
+
 	if queryType == dns.TypeNS {
 		if queryString != "." {
-			currentLevel = strings.Join(strings.Split(queryString, ".")[1:], ".") + ending
+			trimmed := strings.TrimRight(queryString, ".")
+			if psRet, _ := publicsuffix.PublicSuffix(trimmed); psRet == trimmed {
+				currentLevel = trimmed + "."
+			} else {
+				currentLevel = strings.Join(strings.Split(queryString, ".")[1:], ".") + ending
+			}
 		} else {
 			currentLevel = "."
 		}
@@ -560,6 +569,15 @@ func inferCurrentLevel(queryString string, queryType uint16) string {
 		currentLevel = queryString
 	}
 	return currentLevel
+}
+
+func removeOneTokenFromTheLeft(in string) string {
+	ending := ""
+	if strings.HasSuffix(in, ".") {
+		ending = "."
+	}
+
+	return strings.Join(dns.SplitDomainName(in)[1:], ".") + ending
 }
 
 /// handles one non-recursive query (object & subject) from a specified target
@@ -639,6 +657,42 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16, sugges
 		numDSMatched := 0
 		q.debug("Retrieving from cache [%s][%s][DS]\n", q.provider, object)
 		pubDS, _, e := q.retrieveCache(q.provider, currentLevel, dns.TypeDS)
+		if len(pubDS) == 0 {
+			/// we have to do an ad-hoc query for DS record.
+			/// this means: determine superior level, get cache record for NS/A, and do the effective DS query
+			superiorLevel := removeOneTokenFromTheLeft(currentLevel)
+			chNS, _, e := q.retrieveCache(q.provider, superiorLevel, dns.TypeNS)
+			if e != nil || len(chNS) == 0 {
+
+				q.debug("Cannot obtain cached value for [%s]/NS. failing\n", superiorLevel)
+				if forgivingDNSSECCheck {
+					q.setChainOfTrust(false)
+					break
+				}
+				return nil, 0, newError(errorCacheMiss, severityMajor, "cannot fetch NS records (used to query DS records, which are currently missing from cache, all done for [%s] domain) [%s]", currentLevel, e.String())
+			}
+			chNSA, _, e := q.retrieveCache(q.provider, chNS[0].(*dns.NS).Ns, dns.TypeA)
+			if e != nil || len(chNSA) == 0 {
+				q.debug("Cannot obtain cached value for [%s]/NS/A. failing\n", superiorLevel)
+				if forgivingDNSSECCheck {
+					q.setChainOfTrust(false)
+					break
+				}
+				return nil, 0, newError(errorCacheMiss, severityMajor, "cannot fetch A records (fo NSes, used to query DS records, which are currently missing from cache, all done for [%s] domain) [%s]", currentLevel, e.String())
+			}
+
+			qryDS, _, err := q.simpleResolve(currentLevel, chNSA[0].(*dns.A).A.String(), dns.TypeDS, 0)
+			if err != nil || qryDS == nil || len(qryDS.Answer) == 0 {
+				q.debug("Cannot query DS for [%s]. failing\n", currentLevel)
+				if forgivingDNSSECCheck {
+					q.setChainOfTrust(false)
+					break
+				}
+				return nil, 0, newError(errorCacheMiss, severityMajor, "cannot query [%s]/DS records (which are currently missing from cache, all done for [%s] domain) [%s]", currentLevel, currentLevel, e.String())
+			}
+
+			pubDS = qryDS.Answer
+		}
 		/// error is active only when no records are returned
 		q.debug("Got %d DS records from cache.\n", len(pubDS))
 		if e != nil {
@@ -646,6 +700,7 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16, sugges
 				q.setChainOfTrust(false)
 				break
 			}
+
 			return nil, 0, newError(errorCacheMiss, severityMajor, "cannot fetch DS records [%s]", e.String())
 		}
 		for _, rr := range pubDS {
