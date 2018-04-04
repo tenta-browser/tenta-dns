@@ -36,8 +36,6 @@ import (
 	"strings"
 	"time"
 
-	"golang.org/x/net/publicsuffix"
-
 	nlog "github.com/tenta-browser/tenta-dns/log"
 	"github.com/tenta-browser/tenta-dns/runtime"
 
@@ -556,12 +554,12 @@ func inferCurrentLevel(queryString string, queryType uint16) string {
 
 	if queryType == dns.TypeNS {
 		if queryString != "." {
-			trimmed := strings.TrimRight(queryString, ".")
-			if psRet, _ := publicsuffix.PublicSuffix(trimmed); psRet == trimmed {
-				currentLevel = trimmed + "."
-			} else {
-				currentLevel = strings.Join(strings.Split(queryString, ".")[1:], ".") + ending
-			}
+			// trimmed := strings.TrimRight(queryString, ".")
+			// if psRet, _ := publicsuffix.PublicSuffix(trimmed); psRet == trimmed && psRet != "co.jp" {
+			// 	currentLevel = trimmed + "."
+			// } else {
+			currentLevel = strings.Join(strings.Split(queryString, ".")[1:], ".") + ending
+			// }
 		} else {
 			currentLevel = "."
 		}
@@ -1162,7 +1160,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 				reply, tw, err = q.simpleResolve(token, iteratedTargetServer, dns.TypeNS, 0)
 				q.timeWasted += tw
 				if err != nil {
-					if ind < len(finalTargetServers)-1 && err.errorCode != errorDNSSECBogus {
+					if ind < len(finalTargetServers)-1 { //&& err.errorCode != errorDNSSECBogus {
 						q.debug("Simpleresolve failed on primary address, falling back.\n")
 						continue
 					}
