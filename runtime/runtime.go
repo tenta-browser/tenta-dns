@@ -50,6 +50,7 @@ type Runtime struct {
 	lg          *logrus.Entry
 	RateLimiter *Limiter
 	SlackWH     *Feedback
+	Cache       *DNSCacheHolder
 }
 
 type finisher func()
@@ -90,6 +91,7 @@ func NewRuntime(cfg Config) *Runtime {
 	rt.SlackWH = StartFeedback(cfg, rt)
 	rt.Stats = StartStats(rt)
 	rt.RateLimiter = StartLimiter(cfg.RateThreshold)
+	rt.Cache = StartCache(rt.lg, CACHE_OPENNIC, CACHE_IANA)
 	rt.AddService()
 	go garbageman(cfg, rt)
 
@@ -150,6 +152,7 @@ func (rt *Runtime) Shutdown() {
 	rt.wg.Wait()
 	rt.SlackWH.Stop()
 	rt.Stats.Stop()
+	rt.Cache.Stop()
 	rt.DB.Close()
 	rt.lg.Info("Shutdown complete")
 }

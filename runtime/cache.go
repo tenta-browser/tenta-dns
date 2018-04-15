@@ -33,7 +33,13 @@ import (
 
 const (
 	CACHE_EVICTION_RATE = 30 /// expressed in seconds
+	CACHE_OPENNIC       = "opennic"
+	CACHE_IANA          = "iana"
 )
+
+type DNSCacheHolder struct {
+	m map[string]*DNSCache /// multiplexer for multiple insulated caches
+}
 
 type DNSCache struct {
 	m  *sync.RWMutex           /// global read-write mutex; write is used for map-level operations (INS/DEL keys, cleanup)
@@ -79,25 +85,54 @@ type cleanupItem struct {
  */
 
 // StartCache -- Creates, starts and returns a cache object
-func StartCache(log *logrus.Entry) *DNSCache {
-	ret := &DNSCache{
-		m:  new(sync.RWMutex),
-		c:  newCleanup(),
-		l:  make(map[string]*domainCache),
-		lg: log,
+func StartCache(log *logrus.Entry, designations ...string) *DNSCacheHolder {
+	ret := &DNSCacheHolder{make(map[string]*DNSCache)}
+
+	for _, cn := range designations {
+		ret.m[cn] = &DNSCache{
+			m:  new(sync.RWMutex),
+			c:  newCleanup(),
+			l:  make(map[string]*domainCache),
+			lg: log.WithField("provider", cn),
+		}
 	}
-	ret.startCleanup()
+
+	if len(designations) != len(ret.m) {
+		log.Fatalf("Supplied %d names out of which only %d is unique.", len(designations), len(ret.m))
+		panic("Cannot start cache with ambiguous names")
+	}
+
+	for _, c := range ret.m {
+		c.startCleanup()
+	}
+
 	return ret
 }
 
 // Stop -- stops caching (stops cleanup thread)
-func (d *DNSCache) Stop() {
-	d.stopCleanup()
+func (d *DNSCacheHolder) Stop() {
+	for _, c := range d.m {
+		c.stopCleanup()
+	}
 }
 
 /*
 ** Core cache functionalities
  */
+
+func (d *DNSCacheHolder) Insert(provider, domain string, rr dns.RR, extra interface{}) {
+	/// concurrent read from a generic map
+	if c, ok := d.m[provider]; ok {
+		c.insert(domain, rr, extra)
+	}
+}
+
+func (d *DNSCacheHolder) Retrieve(provider, domain string, t uint16) []dns.RR {
+	if c, ok := d.m[provider]; ok {
+		return c.retrieve(domain, t)
+	}
+	return nil
+}
 
 func itemCacheFromRR(rr dns.RR, extra interface{}) *itemCache {
 	return &itemCache{time.Now(), time.Duration(rr.Header().Ttl) * time.Second, rr, extra}
@@ -116,7 +151,7 @@ func neutralizeRecord(rr dns.RR) string {
 	return t.String()
 }
 
-func (d *DNSCache) Insert(domain string, rr dns.RR, extra interface{}) {
+func (d *DNSCache) insert(domain string, rr dns.RR, extra interface{}) {
 	d.insertInternal(domain, neutralizeRecord(rr), itemCacheFromRR(rr, extra))
 }
 
@@ -136,7 +171,7 @@ func (d *DNSCache) insertInternal(domain, key string, cachee *itemCache) {
 	d.c.c <- &cleanupItem{domain, rrtype, key, time.Now().Unix() + int64(cachee.Duration*time.Second)}
 }
 
-func (d *DNSCache) Retrieve(domain string, t uint16) (ret []dns.RR) {
+func (d *DNSCache) retrieve(domain string, t uint16) (ret []dns.RR) {
 	d.m.RLock()
 	dom, ok := d.l[domain]
 	if !ok {
