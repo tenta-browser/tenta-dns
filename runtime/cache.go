@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
+	"github.com/sirupsen/logrus"
 )
 
 const (
@@ -35,9 +36,10 @@ const (
 )
 
 type DNSCache struct {
-	m *sync.RWMutex           /// global read-write mutex; write is used for map-level operations (INS/DEL keys, cleanup)
-	c *cleanup                /// global cleanup
-	l map[string]*domainCache /// the effective front-facing layer of the cache
+	m  *sync.RWMutex           /// global read-write mutex; write is used for map-level operations (INS/DEL keys, cleanup)
+	c  *cleanup                /// global cleanup
+	l  map[string]*domainCache /// the effective front-facing layer of the cache
+	lg *logrus.Entry           /// logging
 }
 
 type domainCache struct {
@@ -58,6 +60,7 @@ type cleanup struct {
 	t *time.Ticker             /// cleanup interval ticker
 	c chan *cleanupItem        /// chan to receive cleanup targets
 	q chan bool                /// stop chan
+	w *sync.WaitGroup          /// stop wait sync
 	o int64                    /// origin -- works as a clock skew equalizer -- map keys are synchronized to this value (o + n*INTERVAL);
 	/// and at every interval current time is also normalized to this value -- it's updated every cleanup cycle
 }
@@ -74,9 +77,22 @@ type cleanupItem struct {
 /*
 ** Runtime module functions
  */
-func StartCache() *DNSCache {
-	// return &DNSCache{new(sync.RWMutex)}
-	return nil
+
+// StartCache -- Creates, starts and returns a cache object
+func StartCache(log *logrus.Entry) *DNSCache {
+	ret := &DNSCache{
+		m:  new(sync.RWMutex),
+		c:  newCleanup(),
+		l:  make(map[string]*domainCache),
+		lg: log,
+	}
+	ret.startCleanup()
+	return ret
+}
+
+// Stop -- stops caching (stops cleanup thread)
+func (d *DNSCache) Stop() {
+	d.stopCleanup()
 }
 
 /*
@@ -148,11 +164,14 @@ func (d *DNSCache) Retrieve(domain string, t uint16) (ret []dns.RR) {
  */
 
 func newCleanup() *cleanup {
-	return &cleanup{make(map[int64][]*cleanupItem), time.NewTicker(CACHE_EVICTION_RATE * time.Second), make(chan *cleanupItem, 1000), make(chan bool, 1), time.Now().Unix()}
+	return &cleanup{make(map[int64][]*cleanupItem), time.NewTicker(CACHE_EVICTION_RATE * time.Second), make(chan *cleanupItem, 1000),
+		make(chan bool, 1), new(sync.WaitGroup), time.Now().Unix()}
 }
 
 func (d *DNSCache) startCleanup() {
+	d.c.w.Add(1)
 	go func() {
+		defer d.c.w.Done()
 		isQuitting := false
 		for {
 			select {
@@ -197,4 +216,10 @@ func (d *DNSCache) startCleanup() {
 			}
 		}
 	}()
+
+}
+
+func (d *DNSCache) stopCleanup() {
+	d.c.q <- true
+	d.c.w.Wait()
 }
