@@ -147,7 +147,6 @@ func neutralizeRecord(rr dns.RR) string {
 	case *dns.SOA:
 		rec.Expire, rec.Minttl, rec.Refresh, rec.Retry = 0, 0, 0, 0
 	}
-
 	return t.String()
 }
 
@@ -166,9 +165,15 @@ func (d *DNSCache) insertInternal(domain, key string, cachee *itemCache) {
 	defer dom.m.Unlock()
 	d.m.Unlock()
 	rrtype := cachee.RR.Header().Rrtype
+	if _, ok := dom.l[rrtype]; !ok {
+		dom.l[rrtype] = make(map[string]*itemCache)
+	}
 	dom.l[rrtype][key] = cachee
 	/// submit item for cleanup
-	d.c.c <- &cleanupItem{domain, rrtype, key, time.Now().Unix() + int64(cachee.Duration*time.Second)}
+	d.c.c <- &cleanupItem{
+		domain, rrtype, key,
+		time.Now().Unix() +
+			int64(cachee.Duration*time.Second)}
 }
 
 func (d *DNSCache) retrieve(domain string, t uint16) (ret []dns.RR) {
