@@ -37,6 +37,11 @@ const (
 	CACHE_IANA          = "iana"
 )
 
+const (
+	KV_TLS_CAPABILITY = "tlscap"
+	KV_TCP_PREFERENCE = "tcppref"
+)
+
 type DNSCacheHolder struct {
 	m map[string]*DNSCache /// multiplexer for multiple insulated caches
 }
@@ -45,6 +50,7 @@ type DNSCache struct {
 	m  *sync.RWMutex           /// global read-write mutex; write is used for map-level operations (INS/DEL keys, cleanup)
 	c  *cleanup                /// global cleanup
 	l  map[string]*domainCache /// the effective front-facing layer of the cache
+	k  *sync.Map               /// key-value store attached to every instance of cache (storing non-RR data)
 	lg *logrus.Entry           /// logging
 }
 
@@ -93,6 +99,7 @@ func StartCache(log *logrus.Entry, designations ...string) *DNSCacheHolder {
 			m:  new(sync.RWMutex),
 			c:  newCleanup(),
 			l:  make(map[string]*domainCache),
+			k:  new(sync.Map),
 			lg: log.WithField("provider", cn),
 		}
 	}
@@ -132,6 +139,39 @@ func (d *DNSCacheHolder) Retrieve(provider, domain string, t uint16) []dns.RR {
 		return c.retrieve(domain, t)
 	}
 	return nil
+}
+
+func (d *DNSCacheHolder) Put(provider, key string, value interface{}) {
+	d.m[provider].k.Store(key, value)
+}
+
+func (d *DNSCacheHolder) Get(provider, key string) interface{} {
+	ret, _ := d.m[provider].k.Load(key)
+	return ret
+}
+
+func (d *DNSCacheHolder) GetString(provider, key string) (string, bool) {
+	ret, ok := d.m[provider].k.Load(key)
+	if !ok {
+		return "", false
+	}
+	rets, ok := ret.(string)
+	if !ok {
+		return "", false
+	}
+	return rets, true
+}
+
+func (d *DNSCacheHolder) GetBool(provider, key string) (bool, bool) {
+	ret, ok := d.m[provider].k.Load(key)
+	if !ok {
+		return false, false
+	}
+	retb, ok := ret.(bool)
+	if !ok {
+		return false, false
+	}
+	return retb, true
 }
 
 func itemCacheFromRR(rr dns.RR, extra interface{}) *itemCache {
@@ -193,6 +233,10 @@ func (d *DNSCache) retrieve(domain string, t uint16) (ret []dns.RR) {
 		if v.Time.Add(v.Duration).Before(time.Now()) {
 			delete(interm, k)
 			continue
+		} else
+		/// otherwise adjust RR's TTL accordingly
+		{
+			v.RR.Header().Ttl = uint32(time.Now().Sub(v.Time))
 		}
 		ret = append(ret, v.RR)
 	}
@@ -262,4 +306,12 @@ func (d *DNSCache) startCleanup() {
 func (d *DNSCache) stopCleanup() {
 	d.c.q <- true
 	d.c.w.Wait()
+}
+
+/*
+** Helpers and convenience methods
+ */
+// MapKey -- creates a key-value store key with the given prefix and suffix. (to put simply joins them with a colon char)
+func MapKey(prefix, suffix string) string {
+	return prefix + ":" + suffix
 }
