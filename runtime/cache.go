@@ -80,10 +80,10 @@ type responseCache struct {
 }
 
 type itemCache struct {
-	time.Time                 /// time created
-	time.Duration             /// ttl value
-	dns.RR                    /// the actual record
-	val           interface{} /// other values stored pertaining to the record (DNSSEC situation, etc)
+	time.Time                     /// time created
+	time.Duration                 /// ttl value
+	dns.RR                        /// the actual record
+	val           *itemCacheExtra /// other values stored pertaining to the record (DNSSEC situation, etc)
 }
 
 type cleanup struct {
@@ -103,6 +103,10 @@ type cleanupItem struct {
 	key string /// key in domainCache second map, aka map[uin16]map[string]dns.RR
 	///									   						    ^^^^^^ this one
 	when int64 /// unix timestamp of when the item is planned for eviction
+}
+
+type itemCacheExtra struct {
+	nxdomain, nodata bool
 }
 
 /*
@@ -241,7 +245,7 @@ func (d *DNSCacheHolder) GetBool(provider, key string) (bool, bool) {
 ** Core cache functionalities
  */
 
-func (d *DNSCacheHolder) Insert(provider, domain string, rr dns.RR, extra interface{}) {
+func (d *DNSCacheHolder) Insert(provider, domain string, rr dns.RR, extra *itemCacheExtra) {
 	/// concurrent read from a generic map
 	if c, ok := d.m[provider]; ok {
 		c.insert(domain, rr, extra)
@@ -254,14 +258,14 @@ func (d *DNSCacheHolder) InsertResponse(provider, domain string, r *dns.Msg) {
 	}
 }
 
-func (d *DNSCacheHolder) Retrieve(provider, domain string, t uint16, dnssec bool) interface{} {
+func (d *DNSCacheHolder) Retrieve(provider, domain string, t uint16, dnssec bool) (ret interface{}, extra *itemCacheExtra) {
 	if c, ok := d.m[provider]; ok {
 		return c.retrieve(domain, t, dnssec)
 	}
-	return nil
+	return nil, nil
 }
 
-func itemCacheFromRR(rr dns.RR, extra interface{}) *itemCache {
+func itemCacheFromRR(rr dns.RR, extra *itemCacheExtra) *itemCache {
 	return &itemCache{time.Now(), time.Duration(rr.Header().Ttl) * time.Second, rr, extra}
 }
 
@@ -292,7 +296,7 @@ func neutralizeRecord(rr dns.RR) string {
 	return t.String()
 }
 
-func (d *DNSCache) insert(domain string, rr dns.RR, extra interface{}) {
+func (d *DNSCache) insert(domain string, rr dns.RR, extra *itemCacheExtra) {
 	d.insertInternal(domain, itemCacheFromRR(rr, extra))
 }
 
@@ -322,7 +326,7 @@ func (d *DNSCache) insertInternal(domain string, cachee opaqueCacheItem) {
 			int64(cachee.validity()/time.Second)}
 }
 
-func (d *DNSCache) retrieve(domain string, t uint16, dnssec bool) (ret interface{}) {
+func (d *DNSCache) retrieve(domain string, t uint16, dnssec bool) (ret interface{}, extra *itemCacheExtra) {
 	d.m.RLock()
 	dom, ok := d.l[domain]
 	if !ok {
@@ -342,21 +346,24 @@ func (d *DNSCache) retrieve(domain string, t uint16, dnssec bool) (ret interface
 		} else { /// if opaque cache item has valid TTL
 			if dnssec && v.isDNSSECStore() { /// if we need dnssec and we have a dnssec response, we return *the* response (only one of those per RRtype)
 				v.adjustValidity(int64(-time.Now().Sub(v.timeCreated()) / time.Second))
-				return v.(*responseCache).Msg
+				return v.(*responseCache).Msg, nil
 			} else if !dnssec && !v.isDNSSECStore() { /// if we need regular item and we have a RR
 				v.adjustValidity(int64(-time.Now().Sub(v.timeCreated()) / time.Second))
 				retRegular = append(retRegular, v.(*itemCache).RR)
+				if extra == nil && v.(*itemCache).val != nil {
+					extra = v.(*itemCache).val
+				}
 			} else { /// mixed parameters
 				continue
 			}
 		}
 	}
 	if dnssec {
-		return retRegular
+		return retRegular, extra
 	}
 	/// return a nil struct pointer so the interface (ptr) itself wouldn't be nil
 	var retDummyDnssec *dns.Msg
-	return retDummyDnssec
+	return retDummyDnssec, nil
 }
 
 /*
