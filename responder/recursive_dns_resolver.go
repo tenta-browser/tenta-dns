@@ -252,7 +252,8 @@ func Resolve(rt *runtime.Runtime, lg *logrus.Entry, provider string, incoming *d
 		}
 	}
 
-	return
+	/// do the actual recursion
+	return doQueryRecursively(rrt, entryPoint)
 }
 
 func doQueryRecursively(rrt *ResolverRuntime, level int) *dns.Msg {
