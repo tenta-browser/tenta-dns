@@ -201,22 +201,8 @@ func (d *DNSCacheHolder) Stop() {
 }
 
 /*
-** Core cache functionalities
+** KV Store primitives
  */
-
-func (d *DNSCacheHolder) Insert(provider, domain string, rr dns.RR, extra interface{}) {
-	/// concurrent read from a generic map
-	if c, ok := d.m[provider]; ok {
-		c.insert(domain, rr, extra)
-	}
-}
-
-func (d *DNSCacheHolder) Retrieve(provider, domain string, t uint16, dnssec bool) interface{} {
-	if c, ok := d.m[provider]; ok {
-		return c.retrieve(domain, t, dnssec)
-	}
-	return nil
-}
 
 func (d *DNSCacheHolder) Put(provider, key string, value interface{}) {
 	d.m[provider].k.Store(key, value)
@@ -249,6 +235,30 @@ func (d *DNSCacheHolder) GetBool(provider, key string) (bool, bool) {
 		return false, false
 	}
 	return retb, true
+}
+
+/*
+** Core cache functionalities
+ */
+
+func (d *DNSCacheHolder) Insert(provider, domain string, rr dns.RR, extra interface{}) {
+	/// concurrent read from a generic map
+	if c, ok := d.m[provider]; ok {
+		c.insert(domain, rr, extra)
+	}
+}
+
+func (d *DNSCacheHolder) InsertResponse(provider, domain string, r *dns.Msg) {
+	if c, ok := d.m[provider]; ok {
+		c.insertResponse(domain, r)
+	}
+}
+
+func (d *DNSCacheHolder) Retrieve(provider, domain string, t uint16, dnssec bool) interface{} {
+	if c, ok := d.m[provider]; ok {
+		return c.retrieve(domain, t, dnssec)
+	}
+	return nil
 }
 
 func itemCacheFromRR(rr dns.RR, extra interface{}) *itemCache {
