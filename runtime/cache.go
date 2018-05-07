@@ -42,6 +42,10 @@ const (
 	KV_TCP_PREFERENCE = "tcppref"
 )
 
+const (
+	ITEM_CACHE_DNSSEC_DESIGNATION = "dnssec-"
+)
+
 type DNSCacheHolder struct {
 	m map[string]*DNSCache /// multiplexer for multiple insulated caches
 }
@@ -55,9 +59,24 @@ type DNSCache struct {
 }
 
 type domainCache struct {
-	m *sync.RWMutex                    /// ops mutex
-	l map[uint16]map[string]*itemCache /// an RR list/map, in all its splendor
+	m *sync.RWMutex                         /// ops mutex
+	l map[uint16]map[string]opaqueCacheItem /// an RR list/map, in all its splendor
 	/// rationale behind using a map (vs list/array) is as follows:
+}
+
+type opaqueCacheItem interface {
+	isDNSSECStore() bool
+	mapKey() string
+	keyQType() uint16
+	timeCreated() time.Time
+	validity() time.Duration
+	adjustValidity(int64)
+}
+
+type responseCache struct {
+	time.Time
+	time.Duration
+	*dns.Msg
 }
 
 type itemCache struct {
@@ -84,6 +103,64 @@ type cleanupItem struct {
 	key string /// key in domainCache second map, aka map[uin16]map[string]dns.RR
 	///									   						    ^^^^^^ this one
 	when int64 /// unix timestamp of when the item is planned for eviction
+}
+
+/*
+** Opaque Cache Item implementations
+ */
+
+func (i *itemCache) isDNSSECStore() bool {
+	return false
+}
+
+func (i *itemCache) mapKey() string {
+	return neutralizeRecord(i.RR)
+}
+
+func (i *itemCache) keyQType() uint16 {
+	return i.RR.Header().Rrtype
+}
+
+func (i *itemCache) timeCreated() time.Time {
+	return i.Time
+}
+
+func (i *itemCache) validity() time.Duration {
+	return i.Duration
+}
+
+func (i *itemCache) adjustValidity(delta int64) {
+	i.Header().Ttl = uint32(int64(i.Header().Ttl) + delta)
+}
+
+func (r *responseCache) isDNSSECStore() bool {
+	return true
+}
+
+func (r *responseCache) mapKey() string {
+	return ITEM_CACHE_DNSSEC_DESIGNATION + dns.TypeToString[r.Question[0].Qtype]
+}
+
+func (r *responseCache) keyQType() uint16 {
+	return r.Question[0].Qtype
+}
+
+func (r *responseCache) timeCreated() time.Time {
+	return r.Time
+}
+
+func (r *responseCache) validity() time.Duration {
+	return r.Duration
+}
+
+func (r *responseCache) adjustValidity(delta int64) {
+	rrHolder := [][]dns.RR{r.Answer, r.Ns, r.Extra}
+
+	for _, h := range rrHolder {
+		for _, rr := range h {
+			rr.Header().Ttl = uint32(int64(rr.Header().Ttl) + delta)
+		}
+	}
 }
 
 /*
@@ -134,9 +211,9 @@ func (d *DNSCacheHolder) Insert(provider, domain string, rr dns.RR, extra interf
 	}
 }
 
-func (d *DNSCacheHolder) Retrieve(provider, domain string, t uint16) []dns.RR {
+func (d *DNSCacheHolder) Retrieve(provider, domain string, t uint16, dnssec bool) interface{} {
 	if c, ok := d.m[provider]; ok {
-		return c.retrieve(domain, t)
+		return c.retrieve(domain, t, dnssec)
 	}
 	return nil
 }
@@ -178,6 +255,21 @@ func itemCacheFromRR(rr dns.RR, extra interface{}) *itemCache {
 	return &itemCache{time.Now(), time.Duration(rr.Header().Ttl) * time.Second, rr, extra}
 }
 
+func responseCacheFromMsg(m *dns.Msg) *responseCache {
+	minTTL := time.Hour * 72
+	rrHolder := [][]dns.RR{m.Answer, m.Ns, m.Extra}
+
+	for _, h := range rrHolder {
+		for _, rr := range h {
+			if minTTL > time.Duration(rr.Header().Ttl)*time.Second {
+				minTTL = time.Duration(rr.Header().Ttl) * time.Second
+			}
+		}
+	}
+
+	return &responseCache{time.Now(), minTTL, m}
+}
+
 /// returns a string reprezentation of a resource record, with volatile parts wiped (eg. TTL) for comparison purposes
 func neutralizeRecord(rr dns.RR) string {
 	t := dns.Copy(rr)
@@ -191,32 +283,36 @@ func neutralizeRecord(rr dns.RR) string {
 }
 
 func (d *DNSCache) insert(domain string, rr dns.RR, extra interface{}) {
-	d.insertInternal(domain, neutralizeRecord(rr), itemCacheFromRR(rr, extra))
+	d.insertInternal(domain, itemCacheFromRR(rr, extra))
 }
 
-func (d *DNSCache) insertInternal(domain, key string, cachee *itemCache) {
+func (d *DNSCache) insertResponse(domain string, resp *dns.Msg) {
+	d.insertInternal(domain, responseCacheFromMsg(resp))
+}
+
+func (d *DNSCache) insertInternal(domain string, cachee opaqueCacheItem) {
 	d.m.Lock()
 	dom, ok := d.l[domain]
 	if !ok {
-		dom = &domainCache{new(sync.RWMutex), make(map[uint16]map[string]*itemCache)}
+		dom = &domainCache{new(sync.RWMutex), make(map[uint16]map[string]opaqueCacheItem)}
 		d.l[domain] = dom
 	}
 	dom.m.Lock()
 	defer dom.m.Unlock()
 	d.m.Unlock()
-	rrtype := cachee.RR.Header().Rrtype
+	rrtype := cachee.keyQType()
 	if _, ok := dom.l[rrtype]; !ok {
-		dom.l[rrtype] = make(map[string]*itemCache)
+		dom.l[rrtype] = make(map[string]opaqueCacheItem)
 	}
-	dom.l[rrtype][key] = cachee
+	dom.l[rrtype][cachee.mapKey()] = cachee
 	/// submit item for cleanup
 	d.c.c <- &cleanupItem{
-		domain, rrtype, key,
+		domain, rrtype, cachee.mapKey(),
 		time.Now().Unix() +
-			int64(cachee.Duration*time.Second)}
+			int64(cachee.validity()/time.Second)}
 }
 
-func (d *DNSCache) retrieve(domain string, t uint16) (ret []dns.RR) {
+func (d *DNSCache) retrieve(domain string, t uint16, dnssec bool) (ret interface{}) {
 	d.m.RLock()
 	dom, ok := d.l[domain]
 	if !ok {
@@ -226,21 +322,31 @@ func (d *DNSCache) retrieve(domain string, t uint16) (ret []dns.RR) {
 	dom.m.RLock()
 	defer dom.m.RUnlock()
 	d.m.RUnlock()
-
+	retRegular := []dns.RR{}
 	interm := dom.l[t]
 	for k, v := range interm {
 		/// if item is queried before rounded eviction time
-		if v.Time.Add(v.Duration).Before(time.Now()) {
+		if v.timeCreated().Add(v.validity()).Before(time.Now()) {
 			delete(interm, k)
 			continue
-		} else
-		/// otherwise adjust RR's TTL accordingly
-		{
-			v.RR.Header().Ttl = uint32(time.Now().Sub(v.Time))
+		} else { /// if opaque cache item has valid TTL
+			if dnssec && v.isDNSSECStore() { /// if we need dnssec and we have a dnssec response, we return *the* response (only one of those per RRtype)
+				v.adjustValidity(int64(-time.Now().Sub(v.timeCreated()) / time.Second))
+				return v.(*responseCache).Msg
+			} else if !dnssec && !v.isDNSSECStore() { /// if we need regular item and we have a RR
+				v.adjustValidity(int64(-time.Now().Sub(v.timeCreated()) / time.Second))
+				retRegular = append(retRegular, v.(*itemCache).RR)
+			} else { /// mixed parameters
+				continue
+			}
 		}
-		ret = append(ret, v.RR)
 	}
-	return
+	if dnssec {
+		return retRegular
+	}
+	/// return a nil struct pointer so the interface (ptr) itself wouldn't be nil
+	var retDummyDnssec *dns.Msg
+	return retDummyDnssec
 }
 
 /*
@@ -314,4 +420,18 @@ func (d *DNSCache) stopCleanup() {
 // MapKey -- creates a key-value store key with the given prefix and suffix. (to put simply joins them with a colon char)
 func MapKey(prefix, suffix string) string {
 	return prefix + ":" + suffix
+}
+
+func AsRR(in interface{}) []dns.RR {
+	if ret, ok := in.([]dns.RR); ok {
+		return ret
+	}
+	return nil
+}
+
+func AsMsg(in interface{}) *dns.Msg {
+	if ret, ok := in.(*dns.Msg); ok {
+		return ret
+	}
+	return nil
 }
