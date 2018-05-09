@@ -9,6 +9,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 
+	"github.com/jinzhu/copier"
 	"github.com/miekg/dns"
 	"github.com/tenta-browser/tenta-dns/common"
 	"github.com/tenta-browser/tenta-dns/runtime"
@@ -24,6 +25,10 @@ const (
 	PROVIDER_OPENNIC = "opennic"
 )
 
+var (
+	RESPONSE_EMPTY = [][]dns.RR{nil, nil, nil}
+)
+
 // ResolverRuntime -- central piece of a resolve; holds all the necessary data, incoming query, ancillary modules etc
 type ResolverRuntime struct {
 	c *runtime.DNSCacheHolder
@@ -37,6 +42,7 @@ type ResolverRuntime struct {
 	record        uint16               /// requested RR type (miek dns lib format)
 	domain        string               /// the original requested domain
 	zones         []string             /// tokens of the original domain
+	currentZone   string               /// the zone we are currently quering in (it's the parent zone of the current query subject)
 	prefNet       string               /// preferred network to use for upstream queries
 	transactions  []*transaction       /// a log of all the transactions until an answer is formulated
 	targetServers map[string][]*entity /// a zone string to available nameservers map (the first level, "." is filled automatically)
@@ -114,8 +120,7 @@ func resolveParallelHarness(rrt *ResolverRuntime, target []*dns.NS) (result []*e
 	achan := make(chan *dns.Msg, len(input))
 	for _, q := range input {
 		go func(question *dns.Msg) {
-			answer := Resolve(&runtime.Runtime{Cache: rrt.c, IPPool: rrt.p, SlackWH: rrt.f, Stats: rrt.s},
-				rrt.l, rrt.provider, question)
+			answer, _ := Resolve(NewResolverRuntime(&runtime.Runtime{Cache: rrt.c, IPPool: rrt.p, SlackWH: rrt.f, Stats: rrt.s}, rrt.l, rrt.provider, question))
 			answer.Question = question.Question
 			achan <- answer
 		}(q)
@@ -166,13 +171,9 @@ func doQueryParallelHarness(rrt *ResolverRuntime, targetServers []*entity, qname
 
 }
 
-// Resolve -- takes a DNS question, and turns it into a DNS answer, be that a set of RRs or a failure.
-// *outgoing* is only partially filled, RCODE and RRs are set, the rest is up to the caller.
-// Expects a *runtime.Runtime, and a *dns.Msg as input, it then sets up a ResolverRuntime for internal use
-// Its operating principle is to do one time setup and checks, and then launch the recursive parts to do their work
-func Resolve(rt *runtime.Runtime, lg *logrus.Entry, provider string, incoming *dns.Msg) (outgoing *dns.Msg) {
+func NewResolverRuntime(rt *runtime.Runtime, lg *logrus.Entry, provider string, incoming *dns.Msg) (rrt *ResolverRuntime) {
 	lg.Infof("Constructing resolver context, for [%s]/[%s]/[%s]", provider, incoming.Question[0].Name, dns.TypeToString[incoming.Question[0].Qtype])
-	rrt := &ResolverRuntime{
+	rrt = &ResolverRuntime{
 		c: rt.Cache, p: rt.IPPool, f: rt.SlackWH, s: rt.Stats, l: lg, original: incoming, provider: provider,
 	}
 	/// session setup
@@ -183,22 +184,39 @@ func Resolve(rt *runtime.Runtime, lg *logrus.Entry, provider string, incoming *d
 	rrt.prefNet = "udp"
 	rrt.record = rrt.original.Question[0].Qtype
 	rrt.transactions = []*transaction{}
+	return
+}
 
+// Resolve -- takes a DNS question, and turns it into a DNS answer, be that a set of RRs or a failure.
+// *outgoing* is only partially filled, RCODE and RRs are set, the rest is up to the caller.
+// Expects a fully setup *ResolverRuntime as input (see NewResolverRuntime())
+func Resolve(rrt *ResolverRuntime) (outgoing *dns.Msg, e error) {
 	/// first order of business, check the cache
 	/// and in order to do so, we do the following
 	/// check QTYPE for full domain in cache -- if we get a hit, then return it, if not:
 	/// recursively track back for NS records -- when we get a hit we continue the loop from there
 	rrt.l.Infof("Checking cache for response")
 	entryPoint := 0
-	if targetRR := rrt.c.Retrieve(rrt.provider, rrt.domain, rrt.record); targetRR != nil {
+	targetRR, extra := rrt.c.Retrieve(rrt.provider, rrt.domain, rrt.record, doWeReturnDNSSEC(rrt))
+
+	if r, e, p := handleExtras(rrt, targetRR, extra); p {
+		return r, e
+	}
+
+	if isValidCacheResponse(targetRR, doWeReturnDNSSEC(rrt)) {
 		rrt.l.Infof("Response can be formulated from cache.")
-		return setupResult(rrt, dns.RcodeSuccess, targetRR, nil, nil)
+		return setupResult(rrt, dns.RcodeSuccess, targetRR), nil
 	} else {
 		rrt.l.Infof("Cache holds no exact matches. Retrieving intermediary NS records.")
 		/// we invert the zones array, most specific first, least specific last
 		zonesAsc := invertStringArray(rrt.zones)
 		for i, z := range zonesAsc {
-			if targetNS := ToNS(rrt.c.Retrieve(rrt.provider, z, dns.TypeNS)); targetNS != nil {
+			/// we don't need dnssec
+			cacheResp, extra := rrt.c.Retrieve(rrt.provider, z, dns.TypeNS, false)
+			if r, e, p := handleExtras(rrt, cacheResp, extra); p {
+				return r, e
+			}
+			if targetNS := ToNS(cacheResp); targetNS != nil {
 				/// now it gets a bit trickier, we have to get A records for these NSes,
 				/// which may or may not be in cache
 				/// so to optimize work, let's do it like this, if the NS is in the same zone hierarchy as the target,
@@ -207,7 +225,11 @@ func Resolve(rt *runtime.Runtime, lg *logrus.Entry, provider string, incoming *d
 				/// so for each NS record we check the cache
 				nsEntities := []*entity{}
 				for _, ns := range targetNS {
-					if targetA := ToA(rrt.c.Retrieve(rrt.provider, ns.Ns, dns.TypeA)); targetA != nil {
+					cacheResp, extra := rrt.c.Retrieve(rrt.provider, ns.Ns, dns.TypeA, false)
+					if r, e, p := handleExtras(rrt, cacheResp, extra); p {
+						return r, e
+					}
+					if targetA := ToA(cacheResp); targetA != nil {
 						for _, a := range targetA {
 							nsEntities = append(nsEntities, &entity{name: ns.Ns, ip: a.A.String(), zone: z})
 						}
@@ -219,6 +241,7 @@ func Resolve(rt *runtime.Runtime, lg *logrus.Entry, provider string, incoming *d
 					rrt.l.Infof("We have matching A records. Query loop diminished. Resuming from [%s] down to [%s]", z, rrt.domain)
 					entryPoint = len(rrt.zones) - 1 - i
 					rrt.targetServers[z] = nsEntities
+					rrt.currentZone = z
 					break
 				} else {
 					/// here we can evaluate if we are better off doing a separate resolve of the cached ns, or step further up
@@ -246,6 +269,7 @@ func Resolve(rt *runtime.Runtime, lg *logrus.Entry, provider string, incoming *d
 					rrt.l.Infof("Executing a parallel resolve for NS records")
 					entryPoint = len(rrt.zones) - 1 - i
 					rrt.targetServers[z] = resolveParallelHarness(rrt, targetNS)
+					rrt.currentZone = z
 					break
 				}
 			}
@@ -256,13 +280,90 @@ func Resolve(rt *runtime.Runtime, lg *logrus.Entry, provider string, incoming *d
 	return doQueryRecursively(rrt, entryPoint)
 }
 
-func doQueryRecursively(rrt *ResolverRuntime, level int) *dns.Msg {
-	return nil
+/// function for recursive invocation. handles one level of the query hierarchy, calls itself for next level
+/// operating principle: previous level has set up a list of NSes to question, so it will ask the question specific
+/// to its level, and analyze the response, set up the environment for the next invocation
+func doQueryRecursively(rrt *ResolverRuntime, level int) (*dns.Msg, error) {
+	currentToken := rrt.zones[level]
+	isFinalQuestion := isBottomLevel(rrt, level)
+	rrt.l.Infof("Entering iteration [%s] of [%s]. Final [%v]", currentToken, rrt.domain, isFinalQuestion)
+	/// first of all, check the cache, and check if we're at the bottom level
+	/// if we're at bottom, we ask the final qtype, if not, we ask NS
+	qtype := dns.TypeNS
+	if isFinalQuestion {
+		qtype = rrt.record
+	}
+	cachedRR, extra := rrt.c.Retrieve(rrt.provider, currentToken, qtype, doWeReturnDNSSEC(rrt))
+	if r, e, p := handleExtras(rrt, cachedRR, extra); p {
+		return r, e
+	}
+	if cachedRR != nil {
+		rrt.l.Infof("Found the solution in cache. Using it.")
+		/// if we're at bottom level, aka final question, we can return this as result
+		if isFinalQuestion {
+			return setupResult(rrt, dns.RcodeSuccess, cachedRR), nil
+			/// TODO: find a way to utilize target servers as authority section records
+		} else { /// not last question, we use it to set up next level, and shortcut there
+			rrt.targetServers[rrt.zones[level+1]] = fetchNSAsEntity(rrt, rrt.zones[level+1], false, false)
+			return doQueryRecursively(rrt, level+1)
+		}
+	}
+
+	/// at this point we know that we can't skip an rtt to the NSes
+	res, err := doQueryParallelHarness(rrt, rrt.targetServers[currentToken], currentToken, qtype)
+	/// propagate back (this means, that all NSes returned an error)
+	if err != nil {
+		rrt.l.Errorf("Error in recursive aspect. [%s]", err.Error())
+		return nil, err
+	}
+
+	switch res.Rcode {
+	/// handle nxdomain
+	case dns.RcodeNameError:
+		if isFinalQuestion {
+			/// add negative cache entry
+			// rrt.c.Put(rrt.provider, runtime.MapKey(runtime.KV_NCACHE_ENTRY, )
+		}
+	}
+
+	return nil, nil
 }
 
 /*
 ** Helper functions -- temporarily placed here
  */
+// func negativeCacheMapKey(prefix, qname string, qtype )
+
+/// function for determining if a response has DNSSEC records (DO bit alone is not enough)
+func isDNSSECResponse(in *dns.Msg) bool {
+	rrHolder := [][]dns.RR{in.Answer, in.Ns, in.Extra}
+	for _, arr := range rrHolder {
+		for _, rr := range arr {
+			if rr.Header().Rrtype == dns.TypeDNSKEY || rr.Header().Rrtype == dns.TypeDS || rr.Header().Rrtype == dns.TypeNSEC || rr.Header().Rrtype == dns.TypeNSEC3 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+/// function to determine if cache response has any valid hits
+func isValidCacheResponse(cr interface{}, dnssec bool) bool {
+	if resp, ok := cr.(*dns.Msg); dnssec && ok && resp != nil {
+		return true
+	} else if rr, ok := cr.([]dns.RR); !dnssec && ok && rr != nil {
+		return true
+	}
+	return false
+}
+
+/// returns true if we reached the bottom level of DNS query loop (theoreticaly, not taking possible CNAME redirections etc into account)
+func isBottomLevel(rrt *ResolverRuntime, level int) bool {
+	if level < len(rrt.zones)-1 {
+		return false
+	}
+	return true
+}
 
 /// returns an array of domain bits organized from top to bottom (DNS direction) with previous tokens appended, in FQDN
 /// form eg "foo.bar.example.com" becomes {"com.", "example.com.", "bar.example.com.", "foo.bar.example.com."}
@@ -277,8 +378,43 @@ func tokenizeDomain(in string) []string {
 	return out[1:]
 }
 
-func setupResult(rrt *ResolverRuntime, rcode int, answer, authority, additional []dns.RR) *dns.Msg {
-	return &dns.Msg{MsgHdr: dns.MsgHdr{Rcode: rcode}, Answer: answer, Ns: authority, Extra: additional}
+/// sets up result
+func setupResult(rrt *ResolverRuntime, rcode int, opaqueResponse interface{}) *dns.Msg {
+	switch t := opaqueResponse.(type) {
+	case [][]dns.RR:
+		return &dns.Msg{MsgHdr: dns.MsgHdr{Rcode: rcode}, Answer: t[0], Ns: t[1], Extra: t[2]}
+	case []dns.RR:
+		return &dns.Msg{MsgHdr: dns.MsgHdr{Rcode: rcode}, Answer: t}
+	case dns.RR: /// single RR means a SOA for nxdomain/nodata responses
+		return &dns.Msg{MsgHdr: dns.MsgHdr{Rcode: rcode}, Ns: []dns.RR{t}}
+	case *dns.Msg:
+		t.Rcode = rcode
+		return t
+	default:
+		return nil
+	}
+}
+
+/// handle
+func handleExtras(rrt *ResolverRuntime, cacheRet interface{}, extra *runtime.ItemCacheExtra) (ret *dns.Msg, err error, propagate bool) {
+	if extra.Nxdomain || extra.Nodata {
+		retCode := dns.RcodeNameError
+		if extra.Nodata {
+			retCode = dns.RcodeSuccess
+		}
+		switch t := cacheRet.(type) {
+		case *dns.Msg:
+			ret := new(dns.Msg)
+			if e := copier.Copy(ret, t); e != nil {
+				return nil, fmt.Errorf("cannot deep-copy response contents from cache [%s]", e.Error()), true
+			}
+			return ret, nil, true
+		case []dns.RR:
+			/// TODO: fetch a soa for nxdomain responses
+			return setupResult(rrt, retCode, RESPONSE_EMPTY), nil, true
+		}
+	}
+	return nil, nil, false
 }
 
 /// setupClient takes care of setting up the transport for the query.
@@ -307,6 +443,74 @@ func setupClient(rrt *ResolverRuntime, server *entity) (c *dns.Client, p string)
 	}
 
 	return
+}
+
+/// convenience function consisting of retrieving NS records from cache, retrieving their matching A records
+/// (or, in case they don't exist, resolving them), and constructing the result as an entity array
+/// zone -- is the token we search for in cache. namely it's the nameserver, we want resolved.
+/// resolveNS -- launch a resolve if we don't have a cache entry for NS
+/// resolveA -- launch a resolve for A records, if cache is empty
+func fetchNSAsEntity(rrt *ResolverRuntime, zone string, resolveNS, resolveA bool) (nsEntities []*entity) {
+	/// do the cache get for NS records
+	cacheRet, extra := rrt.c.Retrieve(rrt.provider, zone, dns.TypeNS, false)
+	if _, _, p := handleExtras(rrt, cacheRet, extra); p {
+		/// return a generic nil
+		/// TODO: maybe add signalling for special cases like nxdomain
+		return nil
+	}
+	targetNS := ToNS(cacheRet)
+
+	if targetNS == nil {
+		rrt.l.Infof("fetchNSAsEntity: Cache miss for NS records.")
+		/// we are specifically bound not to resolve NS records. nothing more to do here
+		if !resolveNS {
+			rrt.l.Infof("fetchNSAsEntity: Returning empty handed (ns resolve forbidden).")
+			return nil
+		}
+		rrt.l.Infof("fetchNSAsEntity: Retrieving NS records the hard way.")
+		resolvedNS, _ := Resolve(NewResolverRuntime(&runtime.Runtime{Cache: rrt.c, IPPool: rrt.p, SlackWH: rrt.f, Stats: rrt.s}, rrt.l, rrt.provider, newDNSQuery(zone, dns.TypeNS)))
+		/// check if we have glue records (if indeed we have, construct the entities array, and return it, else, pass the Ns array further down to processing)
+		for _, answer := range resolvedNS.Answer {
+			if ns, ok := answer.(*dns.NS); ok {
+				targetNS = append(targetNS, ns)
+				for _, additional := range resolvedNS.Extra {
+					if a, ok := additional.(*dns.A); ok && ns.Ns == a.Hdr.Name {
+						/// TODO: put KV store query for zone membership here
+						nsEntities = append(nsEntities, newEntity(ns.Ns, a.A.String(), ""))
+					}
+				}
+			}
+		}
+		/// we got lucky and have something to return without further processing
+		if len(nsEntities) != 0 {
+			return
+		}
+		/// if not, we have a set up targetNS array to continue the operation
+	}
+	/// now we have NS RRs in targetNS array, try to translate them into A records
+	rrt.l.Infof("fetchNSAsEntity: We have NS records for zone [%s]. Checking A records.", zone)
+	for _, ns := range targetNS {
+		cacheRet, extra := rrt.c.Retrieve(rrt.provider, ns.Ns, dns.TypeA, false)
+		if _, _, p := handleExtras(rrt, cacheRet, extra); p {
+			/// don't break out just yet
+			continue
+		}
+		if targetA := ToA(cacheRet); targetA != nil {
+			for _, a := range targetA {
+				nsEntities = append(nsEntities, &entity{name: ns.Ns, ip: a.A.String(), zone: zone})
+			}
+		}
+	}
+	/// we have at least _some_ data we can use, so we return that
+	if len(nsEntities) != 0 {
+		rrt.l.Infof("fetchNSAsEntity: We have matching A records. Returning.")
+		return
+	} else if resolveA {
+		rrt.l.Infof("fetchNSAsEntity: No matching A records found for any NS records. Launching resolve")
+		return resolveParallelHarness(rrt, targetNS)
+	}
+	rrt.l.Infof("fetchNSAsEntity: Returning empty handed")
+	return nil
 }
 
 /// appends a transaction to the list

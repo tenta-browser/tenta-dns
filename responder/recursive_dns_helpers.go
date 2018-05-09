@@ -23,19 +23,35 @@ func refuseAny(w dns.ResponseWriter, r *dns.Msg, rt *runtime.Runtime) {
 /// Set up a couple of typed cache returns, for specific usages
 /// General policy is to skip type conversion errors, and return valid data
 
-func ToA(rr []dns.RR) (ret []*dns.A) {
-	for _, r := range rr {
-		if a, ok := r.(*dns.A); ok {
-			ret = append(ret, a)
+func ToA(cr interface{}) (ret []*dns.A) {
+	if rr, ok := cr.([]dns.RR); ok {
+		for _, r := range rr {
+			if a, ok := r.(*dns.A); ok {
+				ret = append(ret, a)
+			}
+		}
+	} else if rs, ok := cr.(*dns.Msg); ok {
+		for _, r := range rs.Answer {
+			if a, ok := r.(*dns.A); ok {
+				ret = append(ret, a)
+			}
 		}
 	}
 	return
 }
 
-func ToNS(rr []dns.RR) (ret []*dns.NS) {
-	for _, r := range rr {
-		if ns, ok := r.(*dns.NS); ok {
-			ret = append(ret, ns)
+func ToNS(cr interface{}) (ret []*dns.NS) {
+	if rr, ok := cr.([]dns.RR); ok {
+		for _, r := range rr {
+			if ns, ok := r.(*dns.NS); ok {
+				ret = append(ret, ns)
+			}
+		}
+	} else if rs, ok := cr.(*dns.Msg); ok {
+		for _, r := range rs.Answer {
+			if ns, ok := r.(*dns.NS); ok {
+				ret = append(ret, ns)
+			}
 		}
 	}
 	return
