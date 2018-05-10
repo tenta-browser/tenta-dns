@@ -106,7 +106,8 @@ type cleanupItem struct {
 }
 
 type ItemCacheExtra struct {
-	Nxdomain, Nodata bool
+	Nxdomain, Nodata, Cname bool
+	Redirect                []*dns.CNAME
 }
 
 /*
