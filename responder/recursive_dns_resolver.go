@@ -28,6 +28,7 @@ const (
 const (
 	RR_NAVIGATOR_NEXT = iota
 	RR_NAVIGATOR_BREAK
+	RR_NAVIGATOR_BREAK_AND_PROPAGATE
 )
 
 var (
@@ -407,6 +408,51 @@ func validateDNSKEY(rrt *ResolverRuntime, level int, dks []*dns.DNSKEY) bool {
 	return true
 }
 
+/// validates RRSIG records
+/// operating principle:
+/// for every set (answer, authority, additional): sort all records into a map
+/// --> for every RRSIG in set, try to validate the covered type array
+func validateRRSIG(rrt *ResolverRuntime, level int, in *dns.Msg) bool {
+	rrFilter := map[uint16][]dns.RR{}
+	rrHolder := [][]dns.RR{in.Answer, in.Ns, in.Extra}
+	dks := []*dns.DNSKEY{}
+	dksRR, eRR := fetchFromCacheOrNetwork(rrt, rrt.zones[level], dns.TypeDNSKEY)
+	if eRR != nil {
+		rrt.l.Errorf("Cannot fetch cache/network DNSKEY for zone [%s]: [%s]", rrt.zones[level], eRR.Error())
+		return false
+	}
+	/// gather DNSKEYs
+	rrNavigator(dksRR, func(rr dns.RR) int {
+		if rr.Header().Rrtype == dns.TypeDNSKEY {
+			dks = append(dks, rr.(*dns.DNSKEY))
+		}
+		return RR_NAVIGATOR_NEXT
+	})
+
+	/// for every section, map the RRs and then try to validate them using the RRSIGs and DNSKEYS
+	/// on error return false without hesitation
+	for _, arr := range rrHolder {
+		rrNavigator(arr, func(rr dns.RR) int {
+			rrFilter[rr.Header().Rrtype] = append(rrFilter[rr.Header().Rrtype], rr)
+			return RR_NAVIGATOR_NEXT
+		})
+		if rrNavigator(rrFilter[dns.TypeRRSIG], func(rrout dns.RR) int {
+			if rrNavigator(dks, func(rrin dns.RR) int {
+				if rrout.(*dns.RRSIG).Verify(rrin.(*dns.DNSKEY), rrFilter[rrout.(*dns.RRSIG).TypeCovered]) != nil {
+					return RR_NAVIGATOR_BREAK_AND_PROPAGATE
+				}
+				return RR_NAVIGATOR_NEXT
+			}) == RR_NAVIGATOR_BREAK_AND_PROPAGATE {
+				return RR_NAVIGATOR_BREAK_AND_PROPAGATE
+			}
+			return RR_NAVIGATOR_NEXT
+		}) == RR_NAVIGATOR_BREAK_AND_PROPAGATE {
+			return false
+		}
+	}
+	return true
+}
+
 func fetchRRByType(from *dns.Msg, tp uint16) (ret []dns.RR) {
 	rrNavigator(from, func(rr dns.RR) int {
 		if rr.Header().Rrtype == tp {
@@ -419,28 +465,37 @@ func fetchRRByType(from *dns.Msg, tp uint16) (ret []dns.RR) {
 
 /// basic convenience for ranging through various RR collections
 /// TODO: replace in all places
-func rrNavigator(input interface{}, action func(dns.RR) int) {
+func rrNavigator(input interface{}, action func(dns.RR) int) int {
 	switch t := input.(type) {
 	case *dns.Msg:
 		rrHolder := [][]dns.RR{t.Answer, t.Ns, t.Extra}
 		for _, arr := range rrHolder {
 			for _, rr := range arr {
-				if action(rr) == RR_NAVIGATOR_BREAK {
+				rc := action(rr)
+				if rc == RR_NAVIGATOR_BREAK {
 					return
+				} else if rc == RR_NAVIGATOR_BREAK_AND_PROPAGATE {
+					return rc
 				}
 			}
 		}
 	case []dns.RR:
 		for _, rr := range t {
-			if action(rr) == RR_NAVIGATOR_BREAK {
+			rc := action(rr)
+			if rc == RR_NAVIGATOR_BREAK {
 				return
+			} else if rc == RR_NAVIGATOR_BREAK_AND_PROPAGATE {
+				return rc
 			}
 		}
 	case [][]dns.RR:
 		for _, arr := range t {
 			for _, rr := range arr {
-				if action(rr) == RR_NAVIGATOR_BREAK {
+				rc := action(rr)
+				if rc == RR_NAVIGATOR_BREAK {
 					return
+				} else if rc == RR_NAVIGATOR_BREAK_AND_PROPAGATE {
+					return rc
 				}
 			}
 		}
