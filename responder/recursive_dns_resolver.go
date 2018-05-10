@@ -407,10 +407,6 @@ func validateDNSKEY(rrt *ResolverRuntime, level int, dks []*dns.DNSKEY) bool {
 	return true
 }
 
-func getDS(rrt *ResolverRuntime, targetZone string) (ret []*dns.DS) {
-
-}
-
 func fetchRRByType(from *dns.Msg, tp uint16) (ret []dns.RR) {
 	rrNavigator(from, func(rr dns.RR) int {
 		if rr.Header().Rrtype == tp {
