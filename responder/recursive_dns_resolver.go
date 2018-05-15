@@ -31,6 +31,19 @@ const (
 	RR_NAVIGATOR_BREAK_AND_PROPAGATE
 )
 
+const (
+	RESPONSE_UNKNOWN = iota
+	RESPONSE_ANSWER
+	RESPONSE_ANSWER_REDIRECT
+	RESPONSE_DELEGATION
+	RESPONSE_DELEGATION_GLUE
+	RESPONSE_NXDOMAIN
+	RESPONSE_EMPTY_NON_TERMINAL
+	RESPONSE_NODATA
+	RESPONSE_REDIRECT
+	RESPONSE_REDIRECT_GLUE
+)
+
 var (
 	RESPONSE_EMPTY = [][]dns.RR{nil, nil, nil}
 	EXTRA_EMPTY    = &runtime.ItemCacheExtra{false, false, false, nil}
@@ -53,6 +66,7 @@ type ResolverRuntime struct {
 	prefNet       string               /// preferred network to use for upstream queries
 	transactions  []*transaction       /// a log of all the transactions until an answer is formulated
 	targetServers map[string][]*entity /// a zone string to available nameservers map (the first level, "." is filled automatically)
+	redirections  []*dns.CNAME         /// a collection of all the redirections (that ultimately will make it into the answer section) until an answer can be formulated
 }
 
 /// this structure is about an entity, it's primary element is one IP
@@ -72,6 +86,12 @@ type transaction struct {
 type parallelQueryResult struct {
 	r *dns.Msg
 	e error
+}
+
+type resolverResponse struct {
+	qname    string
+	qtype    uint16
+	response *dns.Msg
 }
 
 var (
@@ -327,7 +347,6 @@ func doQueryRecursively(rrt *ResolverRuntime, level int) (*dns.Msg, error) {
 	}
 
 	/// no fatal error means we can proceed to DNSSEC validation
-
 	if isDNSSECResponse(res) {
 		if e := validateDNSSEC(rrt, res, level); !e {
 			/// validator returns error only on critical security issues only (which warrant an instant propagation of the error)
@@ -335,13 +354,88 @@ func doQueryRecursively(rrt *ResolverRuntime, level int) (*dns.Msg, error) {
 		}
 	}
 
-	switch res.Rcode {
-	/// handle nxdomain
-	case dns.RcodeNameError:
-		if isFinalQuestion {
-			/// add negative cache entry
-			// rrt.c.Put(rrt.provider, runtime.MapKey(runtime.KV_NCACHE_ENTRY, )
+	/// TODO: add record security check
+	cacheResponse(rrt, res)
+	answerType := evaluateResponse(rrt, currentToken, qtype, level, res)
+
+	switch answerType {
+	case RESPONSE_ANSWER:
+		rrt.l.Infof("Got an answer. Returning it.")
+		return res, nil
+	case RESPONSE_DELEGATION:
+		rrt.l.Infof("Got a naked delegation.")
+		nsRR := []*dns.NS{}
+		rrNavigator(res, func(rr dns.RR) int {
+			if rr.Header().Rrtype == dns.TypeNS {
+				nsRR = append(nsRR, rr.(*dns.NS))
+			}
+			return RR_NAVIGATOR_NEXT
+		})
+		rrt.targetServers[rrt.zones[level+1]] = resolveParallelHarness(rrt, nsRR)
+		rrt.l.Infof("Going deeper into the rabbithole.")
+		return doQueryRecursively(rrt, level+1)
+	case RESPONSE_DELEGATION_GLUE:
+		rrt.l.Infof("Got delegation /w glue records.")
+		servers := []*entity{}
+		rrNavigator(res.Ns, func(rr dns.RR) int {
+			if rr.Header().Rrtype == dns.TypeNS && rr.Header().Name == currentToken {
+				rrNavigator(res.Extra, func(rrIn dns.RR) int {
+					if rrIn.Header().Rrtype == dns.TypeA && rrIn.Header().Name == rr.(*dns.NS).Ns {
+						servers = append(servers, newEntity(rrIn.Header().Name, rrIn.(*dns.A).A.String(), currentToken))
+					}
+					return RR_NAVIGATOR_NEXT
+				})
+			}
+			return RR_NAVIGATOR_NEXT
+		})
+		rrt.targetServers[rrt.zones[level+1]] = servers
+		rrt.l.Infof("Going deeper into the rabbithole.")
+		return doQueryRecursively(rrt, level+1)
+	case RESPONSE_EMPTY_NON_TERMINAL:
+		rrt.l.Infof("Got an NXDOMAIN for an empty-non-terminal. Retrying same servers for one more label.")
+		rrt.targetServers[rrt.zones[level+1]] = rrt.targetServers[currentToken]
+		return doQueryRecursively(rrt, level+1)
+	case RESPONSE_NODATA:
+		rrt.l.Infof("Got a NODATA. Caching and returning it.")
+		rrt.c.Insert(rrt.provider, currentToken, dns.TypeToRR[qtype](), &runtime.ItemCacheExtra{Nodata: true})
+		if doWeReturnDNSSEC(rrt) && isDNSSECResponse(res) {
+			return res, nil
+		} else {
+			retSoa := fetchRRByType(res, dns.TypeSOA)
+			return setupResult(rrt, dns.RcodeSuccess, retSoa[0]), nil
 		}
+	case RESPONSE_NXDOMAIN:
+		rrt.l.Infof("Got an NXDOMAIN. Caching and returning it.")
+		rrt.c.Insert(rrt.provider, currentToken, dns.TypeToRR[qtype](), &runtime.ItemCacheExtra{Nxdomain: true})
+		if doWeReturnDNSSEC(rrt) && isDNSSECResponse(res) {
+			return res, nil
+		} else {
+			retSoa := fetchRRByType(res, dns.TypeSOA)
+			return setupResult(rrt, dns.RcodeNameError, retSoa[0]), nil
+		}
+	case RESPONSE_REDIRECT, RESPONSE_REDIRECT_GLUE:
+		rrt.l.Infof("Got a naked CNAME. Following and resolving it.")
+		cnames := []*dns.CNAME{}
+		rrNavigator(res, func(rr dns.RR) int {
+			if rr.Header().Rrtype == dns.TypeCNAME {
+				cnames = append(cnames, rr.(*dns.CNAME))
+			}
+			return RR_NAVIGATOR_NEXT
+		})
+		lastOwner := redirectNavigator(currentToken, cnames)
+
+		if redirectResult, err := Resolve(NewResolverRuntime(&runtime.Runtime{Cache: rrt.c, IPPool: rrt.p, SlackWH: rrt.f, Stats: rrt.s},
+			rrt.l, rrt.provider, newDNSQuery(lastOwner, qtype))); err != nil {
+			rrt.l.Errorf("Redirect resolution failed with [%s]", err.Error())
+			return nil, err
+		} else {
+			rrt.l.Infof("Redirect resolved successfully. Returning with added references.")
+			redirectResult.Answer = append(redirectResult.Answer, fetchRRByType(res, dns.TypeCNAME)...)
+			return redirectResult, nil
+		}
+	case RESPONSE_UNKNOWN:
+		rrt.l.Fatalf("Cannot determine the type of answer [%s]", res.String())
+		return nil, fmt.Errorf("unknown response type")
 	}
 
 	return nil, nil
@@ -351,6 +445,119 @@ func doQueryRecursively(rrt *ResolverRuntime, level int) (*dns.Msg, error) {
 ** Helper functions -- temporarily placed here
  */
 // func negativeCacheMapKey(prefix, qname string, qtype )
+
+/// convenience func to store a response or all records from it
+func cacheResponse(rrt *ResolverRuntime, in *dns.Msg) {
+	qname := in.Question[0].Name
+
+	if isDNSSECResponse(in) {
+		rrt.c.InsertResponse(rrt.provider, qname, in)
+	}
+
+	rrNavigator(in, func(rr dns.RR) int {
+		rrt.c.Insert(rrt.provider, qname, rr, EXTRA_EMPTY)
+		return RR_NAVIGATOR_NEXT
+	})
+
+}
+
+func evaluateResponse(rrt *ResolverRuntime, qname string, qtype uint16, level int, r *dns.Msg) (rtype int) {
+
+	if r.Rcode == dns.RcodeSuccess {
+		/// it can be answer, delegation, delegation /w glue, redirect, nodata
+		hasCNAME := false
+		hasSOA := false
+		hasNS := false
+
+		rrNavigator(r.Ns, func(rr dns.RR) int {
+			if rr.Header().Rrtype == dns.TypeSOA {
+				hasSOA = true
+			}
+			if rr.Header().Rrtype == dns.TypeNS {
+				hasNS = true
+			}
+			return RR_NAVIGATOR_NEXT
+		})
+
+		/// check NODATA
+		if r.Answer == nil && hasSOA {
+			return RESPONSE_NODATA
+		}
+
+		/// check if it is a straight-forward answer
+		for _, rr := range r.Answer {
+			if rr.Header().Rrtype == qtype && rr.Header().Name == qname {
+				return RESPONSE_ANSWER
+			} else if rr.Header().Rrtype == dns.TypeCNAME {
+				hasCNAME = true
+			}
+		}
+
+		/// check whether response contains multiple CNAMES and an answer too
+		if hasCNAME {
+			redirects := []*dns.CNAME{}
+			rrNavigator(r, func(rr dns.RR) int {
+				if rr.Header().Rrtype == dns.TypeCNAME {
+					redirects = append(redirects, rr.(*dns.CNAME))
+				}
+				return RR_NAVIGATOR_NEXT
+			})
+			lastOwner := redirectNavigator(qname, redirects)
+
+			if rrNavigator(r.Answer, func(rr dns.RR) int {
+				if rr.Header().Rrtype == qtype && rr.Header().Name == lastOwner {
+					return RR_NAVIGATOR_BREAK_AND_PROPAGATE
+				}
+				return RR_NAVIGATOR_NEXT
+			}) == RR_NAVIGATOR_BREAK_AND_PROPAGATE {
+				return RESPONSE_ANSWER_REDIRECT
+			}
+
+		}
+
+		/// check for CNAMES (with or without additional info)
+		if hasCNAME {
+			if !hasNS {
+				return RESPONSE_REDIRECT
+			}
+			return RESPONSE_REDIRECT_GLUE
+		}
+
+		/// check delegation
+		if hasNS {
+			if r.Extra == nil {
+				return RESPONSE_DELEGATION
+			}
+			return RESPONSE_DELEGATION_GLUE
+		}
+
+	} else if r.Rcode == dns.RcodeNameError {
+		/// the various cases of NXDOMAIN
+		if isBottomLevel(rrt, level) {
+			return RESPONSE_EMPTY_NON_TERMINAL
+		}
+		return RESPONSE_NXDOMAIN
+	}
+
+	return RESPONSE_UNKNOWN
+}
+
+/// function that starts off at an owner name, and navigates all linked CNAME records given to reach the last CNAMEs reference field
+func redirectNavigator(start string, redirects []*dns.CNAME) string {
+	for {
+		foundInCycle := false
+		for _, cn := range redirects {
+			if cn.Header().Name == start {
+				start = cn.Target
+				foundInCycle = true
+			}
+		}
+		if !foundInCycle {
+			break
+		}
+	}
+	return start
+}
 
 /// function to validate DNSSEC records
 func validateDNSSEC(rrt *ResolverRuntime, in *dns.Msg, level int) bool {
@@ -366,6 +573,15 @@ func validateDNSSEC(rrt *ResolverRuntime, in *dns.Msg, level int) bool {
 		if !validateDNSKEY(rrt, level, dks) {
 			return false
 		}
+	}
+	if !validateNSEC(rrt, in) {
+		return false
+	}
+	if !validateNSEC3(rrt, in) {
+		return false
+	}
+	if !validateRRSIG(rrt, level, in) {
+		return false
 	}
 
 	return true
@@ -463,9 +679,25 @@ func fetchRRByType(from *dns.Msg, tp uint16) (ret []dns.RR) {
 	return
 }
 
+func validateNSEC(rrt *ResolverRuntime, in *dns.Msg) bool {
+	rrt.l.Infof("Entering validateNSEC()")
+	nsec := []*dns.NSEC{}
+	rrNavigator(in, func(rr dns.RR) int {
+		if rr.Header().Rrtype == dns.TypeNSEC {
+			nsec = append(nsec, rr.(*dns.NSEC))
+		}
+		return RR_NAVIGATOR_NEXT
+	})
+	return true
+}
+
+func validateNSEC3(rrt *ResolverRuntime, in *dns.Msg) bool {
+	return true
+}
+
 /// basic convenience for ranging through various RR collections
 /// TODO: replace in all places
-func rrNavigator(input interface{}, action func(dns.RR) int) int {
+func rrNavigator(input interface{}, action func(dns.RR) int) (ret int) {
 	switch t := input.(type) {
 	case *dns.Msg:
 		rrHolder := [][]dns.RR{t.Answer, t.Ns, t.Extra}
@@ -500,6 +732,7 @@ func rrNavigator(input interface{}, action func(dns.RR) int) int {
 			}
 		}
 	}
+	return
 }
 
 /// function for determining if a response has DNSSEC records (DO bit alone is not enough)
