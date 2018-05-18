@@ -306,7 +306,7 @@ func (d *DNSCache) insertResponse(domain string, resp *dns.Msg) {
 }
 
 func (d *DNSCache) insertInternal(domain string, cachee opaqueCacheItem) {
-	d.lg.Infof("Inserting for [%s]", domain)
+	// d.lg.Infof("Inserting for [%s]", domain)
 	d.m.Lock()
 	dom, ok := d.l[domain]
 	if !ok {
@@ -341,28 +341,28 @@ func (d *DNSCache) retrieve(domain string, t uint16, dnssec bool) (ret interface
 	d.m.RUnlock()
 	retRegular := []dns.RR{}
 	interm := dom.l[t]
-	d.lg.Debugf("Iterating store with size [%d]", len(interm))
+	// d.lg.Debugf("Iterating store with size [%d]", len(interm))
 	for k, v := range interm {
-		switch cahceElemType := v.(type) {
-		case *itemCache:
-			d.lg.Debugf("We have regular [%s] -- [%v]", k, v)
-		case *responseCache:
-			d.lg.Debugf("We have DNSSEC  [%s] -- [%s]", k, cahceElemType.Question[0].String())
-		}
+		// switch cahceElemType := v.(type) {
+		// case *itemCache:
+		// 	d.lg.Debugf("We have regular [%s] -- [%v]", k, v)
+		// case *responseCache:
+		// 	d.lg.Debugf("We have DNSSEC  [%s] -- [%s]", k, cahceElemType.Question[0].String())
+		// }
 
 		/// if item is queried before rounded eviction time
 		if v.timeCreated().Add(v.validity()).Before(time.Now()) {
-			d.lg.Debugf("Deleting record, because [%v] + [%v] > [%v]", v.timeCreated(), v.validity(), time.Now())
+			// d.lg.Debugf("Deleting record, because [%v] + [%v] > [%v]", v.timeCreated(), v.validity(), time.Now())
 			delete(interm, k)
 			continue
 		} else { /// if opaque cache item has valid TTL
-			d.lg.Debugf("Item is within validity period. Returning as requested, or as possible.")
+			// d.lg.Debugf("Item is within validity period. Returning as requested, or as possible.")
 			if dnssec && v.isDNSSECStore() { /// if we need dnssec and we have a dnssec response, we return *the* response (only one of those per RRtype)
-				d.lg.Debugf("Returning DNSSEC cache -- [%v]", v.(*responseCache).Msg.Question[0])
+				// d.lg.Debugf("Returning DNSSEC cache -- [%v]", v.(*responseCache).Msg.Question[0])
 				v.adjustValidity(int64(-time.Now().Sub(v.timeCreated()) / time.Second))
 				return v.(*responseCache).Msg, nil
 			} else if !v.isDNSSECStore() {
-				d.lg.Debugf("Returning regular cache item -- [%v]", v.(*itemCache).RR)
+				// d.lg.Debugf("Returning regular cache item -- [%v]", v.(*itemCache).RR)
 				v.adjustValidity(int64(-time.Now().Sub(v.timeCreated()) / time.Second))
 				retRegular = append(retRegular, v.(*itemCache).RR)
 				if extra == nil && v.(*itemCache).val != nil {
