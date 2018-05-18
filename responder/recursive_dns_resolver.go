@@ -1,9 +1,12 @@
 package responder
 
 import (
+	"encoding/xml"
 	"fmt"
+	"io/ioutil"
 	"math"
 	"net"
+	"net/http"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -13,6 +16,7 @@ import (
 	"github.com/jinzhu/copier"
 	"github.com/miekg/dns"
 	"github.com/tenta-browser/tenta-dns/common"
+	"github.com/tenta-browser/tenta-dns/log"
 	"github.com/tenta-browser/tenta-dns/runtime"
 )
 
@@ -194,7 +198,7 @@ func doQueryParallelHarness(rrt *ResolverRuntime, targetServers []*entity, qname
 	// if targetServers[0].zone == "." {
 	// 	return doQuery(rrt, targetServers[0], qname, qtype)
 	// }
-	diminishedTargetServers := targetServers // []*entity{targetServers[0]}
+	diminishedTargetServers := []*entity{targetServers[0]}
 	routinesDone := int32(0)
 	res := make(chan *parallelQueryResult, len(diminishedTargetServers))
 	for _, srv := range diminishedTargetServers {
@@ -340,10 +344,10 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 	/// unless level == len(rrt.zones) (aka. iob error), which means we are at the final question
 	rrt.l.Infof("Entering doQueryRecursively() with level [%d/%d]", _level, len(rrt.zones))
 	isFinalQuestion := isBottomLevel(rrt, _level)
-	currentZone := rrt.zones[_level]
 	if isFinalQuestion {
 		_level--
 	}
+	currentZone := rrt.currentZone
 	currentToken := rrt.zones[_level+1]
 	/// no more use of integer _level is allowed. Except when going deeper in recursion.
 
@@ -377,18 +381,23 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 		rrt.l.Errorf("Error in recursive aspect. [%s]", err.Error())
 		return nil, err
 	}
-	rrt.l.Infof("DNS query:\n[%s]", res.String())
+	// rrt.l.Infof("DNS query:\n[%s]", res.String())
 	/// no fatal error means we can proceed to DNSSEC validation
 	if isDNSSECResponse(res) {
 		if e := validateDNSSEC(rrt, res, currentZone); !e {
 			/// validator returns error only on critical security issues only (which warrant an instant propagation of the error)
-			return nil, fmt.Errorf("bogus DNSSEC response")
+			rrt.l.Infof("Caught a bogus dnssec response!")
+			return setupResult(rrt, dns.RcodeServerFailure, nil), fmt.Errorf("bogus DNSSEC response")
 		}
 	}
 
 	/// TODO: add record security check
 	cacheResponse(rrt, res)
 	answerType := evaluateResponse(rrt, currentToken, qtype, isFinalQuestion, res)
+
+	if answerType != RESPONSE_EMPTY_NON_TERMINAL {
+		rrt.currentZone = currentToken
+	}
 
 	switch answerType {
 	case RESPONSE_ANSWER:
@@ -614,20 +623,32 @@ func validateDNSSEC(rrt *ResolverRuntime, in *dns.Msg, currentZone string) bool 
 			}
 			return RR_NAVIGATOR_NEXT
 		})
+		rrt.l.Debugf("Trying to validate DNSKEYS [%v]", dks)
 		if !validateDNSKEY(rrt, currentZone, dks) {
 			return false
 		}
+		/// we cache the DNSKEYS quickly, because we might need them before this function returns
+		rrt.l.Debugf("DNSKEYS successfully validated. Caching them. [%v]", dks)
+		// rrNavigator(dks, func(rr dns.RR) int {
+		for _, dk := range dks {
+			rrt.l.Debugf("Inserting [%s]", dk.String())
+			rrt.c.Insert(rrt.provider, dk.Header().Name, dk, EXTRA_EMPTY)
+		}
+		// return RR_NAVIGATOR_NEXT
+		// })
 	}
 	if !validateNSEC(rrt, in) {
 		return false
 	}
+	rrt.l.Infof("NSEC successfully validated")
 	if !validateNSEC3(rrt, in) {
 		return false
 	}
+	rrt.l.Infof("NSEC3 successfully validated")
 	if !validateRRSIG(rrt, currentZone, in) {
 		return false
 	}
-
+	rrt.l.Infof("RRSIG successfully validated")
 	return true
 }
 
@@ -638,26 +659,26 @@ func validateDNSSEC(rrt *ResolverRuntime, in *dns.Msg, currentZone string) bool 
 /// fail if a DNSKEY can't be validated
 func validateDNSKEY(rrt *ResolverRuntime, currentZone string, dks []*dns.DNSKEY) bool {
 	rrt.l.Infof("Entering validateDNSKEY() with [%s][%v]", currentZone, dks)
-	rrt.l.Debug("Zones are [%v]", rrt.zones)
+	rrt.l.Debugf("Zones are [%v]", rrt.zones)
 	dss, err := fetchFromCacheOrNetwork(rrt, currentZone, dns.TypeDS)
 	if err != nil {
 		/// if we cannot produce DS records matching our DNSKEY, fail without question
 		return false
 	}
-
+	rrt.l.Debugf("We fetched DS records [%v]", dss)
 	failed := false
 	rrNavigator(dss, func(dsRR dns.RR) int {
-		lFailed := false
+		lSuccess := false
 		for _, dnskey := range dks {
 			ds := dsRR.(*dns.DS)
 
 			td := dnskey.ToDS(ds.DigestType)
-			if !(td != nil && equalsDS(td, ds)) {
-				lFailed = true
+			if td != nil && equalsDS(td, ds) {
+				lSuccess = true
 				break
 			}
 		}
-		if lFailed == true {
+		if lSuccess == false {
 			failed = true
 			return RR_NAVIGATOR_BREAK
 		}
@@ -678,39 +699,53 @@ func validateRRSIG(rrt *ResolverRuntime, currentZone string, in *dns.Msg) bool {
 	// return true
 	rrFilter := map[uint16][]dns.RR{}
 	rrHolder := [][]dns.RR{in.Answer, in.Ns, in.Extra}
-	dks := []*dns.DNSKEY{}
-	dksRR, eRR := fetchFromCacheOrNetwork(rrt, currentZone, dns.TypeDNSKEY)
-	if eRR != nil {
-		rrt.l.Errorf("Cannot fetch cache/network DNSKEY for zone [%s]: [%s]", currentZone, eRR.Error())
-		return false
+	rrSigs := fetchRRByType(in, dns.TypeRRSIG)
+	dnskeyMap := map[string][]dns.RR{}
+	var err error
+	if len(rrSigs) == 0 {
+		return true
 	}
-	/// gather DNSKEYs
-	rrNavigator(dksRR, func(rr dns.RR) int {
-		if rr.Header().Rrtype == dns.TypeDNSKEY {
-			dks = append(dks, rr.(*dns.DNSKEY))
+
+	for _, rrs := range rrSigs {
+		sigOwner := rrs.(*dns.RRSIG).SignerName
+		if _, ok := dnskeyMap[sigOwner]; !ok {
+			dnskeyMap[sigOwner], err = fetchFromCacheOrNetwork(rrt, sigOwner, dns.TypeDNSKEY)
+			if err != nil {
+				rrt.l.Errorf("Cannot fetch cache/network DNSKEY for zone [%s]: [%s]", currentZone, err.Error())
+				return false
+			}
 		}
-		return RR_NAVIGATOR_NEXT
-	})
+	}
 
 	/// for every section, map the RRs and then try to validate them using the RRSIGs and DNSKEYS
 	/// on error return false without hesitation
+	/// algorith is as follows:
+	/// loop a holder (section), and add items into the filters (global, local) until an RRSIG is found
+	/// when an RRSIG is found try to validate with all the covered records, or just the ones found since the last RRSIG (supports NSEC/NSEC3 signings)
 	for _, arr := range rrHolder {
 		rrNavigator(arr, func(rr dns.RR) int {
 			rrFilter[rr.Header().Rrtype] = append(rrFilter[rr.Header().Rrtype], rr)
 			return RR_NAVIGATOR_NEXT
 		})
-		if rrNavigator(rrFilter[dns.TypeRRSIG], func(rrout dns.RR) int {
-			if rrNavigator(dks, func(rrin dns.RR) int {
-				if rrout.(*dns.RRSIG).Verify(rrin.(*dns.DNSKEY), rrFilter[rrout.(*dns.RRSIG).TypeCovered]) != nil {
-					return RR_NAVIGATOR_BREAK_AND_PROPAGATE
+		rrLFilter := map[uint16][]dns.RR{}
+		for _, rr := range arr {
+			if rrSig, ok := rr.(*dns.RRSIG); ok {
+				rrSigValid := false
+				for _, dks := range dnskeyMap[rrSig.SignerName] {
+					/// try to validate: signature isnt expired, validate with global or validate with local filter
+					if rrSig.ValidityPeriod(time.Now()) &&
+						(rrSig.Verify(dks.(*dns.DNSKEY), rrFilter[rrSig.TypeCovered]) == nil || rrSig.Verify(dks.(*dns.DNSKEY), rrLFilter[rrSig.TypeCovered]) == nil) {
+						rrSigValid = true
+						break
+					}
 				}
-				return RR_NAVIGATOR_NEXT
-			}) == RR_NAVIGATOR_BREAK_AND_PROPAGATE {
-				return RR_NAVIGATOR_BREAK_AND_PROPAGATE
+				if rrSigValid == false {
+					return false
+				}
+				rrLFilter = map[uint16][]dns.RR{}
+			} else {
+				rrLFilter[rr.Header().Rrtype] = append(rrLFilter[rr.Header().Rrtype], rr)
 			}
-			return RR_NAVIGATOR_NEXT
-		}) == RR_NAVIGATOR_BREAK_AND_PROPAGATE {
-			return false
 		}
 	}
 	return true
@@ -739,6 +774,7 @@ func validateNSEC(rrt *ResolverRuntime, in *dns.Msg) bool {
 }
 
 func validateNSEC3(rrt *ResolverRuntime, in *dns.Msg) bool {
+	rrt.l.Infof("Entering validateNSEC3()")
 	return true
 }
 
@@ -838,19 +874,19 @@ func tokenizeDomain(in string) []string {
 func setupResult(rrt *ResolverRuntime, rcode int, opaqueResponse interface{}) (ret *dns.Msg) {
 	switch t := opaqueResponse.(type) {
 	case [][]dns.RR:
-		ret = &dns.Msg{MsgHdr: dns.MsgHdr{Rcode: rcode}, Answer: t[0], Ns: t[1], Extra: t[2]}
+		ret = &dns.Msg{Answer: t[0], Ns: t[1], Extra: t[2]}
 	case []dns.RR:
-		ret = &dns.Msg{MsgHdr: dns.MsgHdr{Rcode: rcode}, Answer: t}
+		ret = &dns.Msg{Answer: t}
 	case dns.RR: /// single RR means a SOA for nxdomain/nodata responses
-		ret = &dns.Msg{MsgHdr: dns.MsgHdr{Rcode: rcode}, Ns: []dns.RR{t}}
+		ret = &dns.Msg{Ns: []dns.RR{t}}
 	case *dns.Msg:
 		t.Rcode = rcode
 		ret = t
 	default:
-		ret = nil
+		ret = &dns.Msg{}
 	}
-	rrt.l.Infof("Setting up result as answer to [%d]", rrt.original.Id)
-	ret.SetReply(rrt.original)
+	rrt.l.Infof("Setting up result as answer to [%d] RC [%s]", rrt.original.Id, dns.RcodeToString[ret.Rcode])
+	ret.SetRcode(rrt.original, rcode)
 	return
 }
 
@@ -1080,4 +1116,82 @@ func doWeReturnDNSSEC(rrt *ResolverRuntime) bool {
 /// the client's interest is usually shown when the incoming query has a set AD bit
 func doWeTouchADFlag(rrt *ResolverRuntime) bool {
 	return rrt.original.AuthenticatedData
+}
+
+/// other data helpers
+
+func getRootTrustAnchors(rt *runtime.Runtime, l *logrus.Entry, provider string) error {
+	rootDS := make([]dns.RR, 0)
+
+	if provider == PROVIDER_TENTA {
+		data, err := http.Get(rootAnchorURL)
+		if err != nil {
+			return fmt.Errorf("cannot download trust anchor [%s]", err)
+		}
+		defer data.Body.Close()
+		rootCertData, err := ioutil.ReadAll(data.Body)
+		if err != nil {
+			return fmt.Errorf("cannot read response data [%s]", err)
+		}
+
+		r := resultData{}
+		if err := xml.Unmarshal([]byte(rootCertData), &r); err != nil {
+			return fmt.Errorf("problem during unmarshal. [%s]", err)
+		}
+
+		for _, dsData := range r.KeyDigest {
+			deleg := new(dns.DS)
+			deleg.Hdr = dns.RR_Header{Name: ".", Rrtype: dns.TypeDS, Class: dns.ClassINET, Ttl: 14400, Rdlength: 0}
+			deleg.Algorithm = dsData.Algorithm
+			deleg.Digest = dsData.Digest
+			deleg.DigestType = dsData.DigestType
+			deleg.KeyTag = dsData.KeyTag
+			rootDS = append(rootDS, deleg)
+		}
+
+	} else if provider == PROVIDER_OPENNIC {
+		q := newQueryParam(".", dns.TypeDNSKEY, l, new(log.EventualLogger), provider, rt, new(ExchangeHistory))
+		krr, e := q.doResolve(resolveMethodFinalQuestion)
+		if e != nil {
+			return fmt.Errorf("Cannot get opennic root keys. [%s]", e.Error())
+		}
+		for _, rr := range krr {
+			if k, ok := rr.(*dns.DNSKEY); ok {
+				rootDS = append(rootDS, k.ToDS(2))
+			}
+		}
+	}
+	///storeCache(provider, ".", rootDS)
+	rrNavigator(rootDS, func(rr dns.RR) int {
+		rt.Cache.Insert(provider, rr.Header().Name, rr, EXTRA_EMPTY)
+		return RR_NAVIGATOR_NEXT
+	})
+
+	return nil
+}
+
+func getRootZone(rt *runtime.Runtime, l *logrus.Entry, provider string) error {
+	t := new(dns.Transfer)
+	m := new(dns.Msg)
+	m.SetAxfr(".")
+	r, e := t.In(m, rootServers[provider][0].ipv4+":53")
+	if e != nil {
+		return fmt.Errorf("cannot execute zone transfer [%s]", e.Error())
+	}
+
+	for env := range r {
+		if env.Error != nil {
+			l.Infof("Zone transfer envelope error [%s]", env.Error.Error())
+			continue
+		}
+		for _, rr := range env.RR {
+			switch rr.(type) {
+			case *dns.A, *dns.AAAA, *dns.NS, *dns.DS, *dns.DNSKEY:
+				rt.Cache.Insert(provider, rr.Header().Name, rr, EXTRA_EMPTY)
+			}
+		}
+
+	}
+
+	return nil
 }
