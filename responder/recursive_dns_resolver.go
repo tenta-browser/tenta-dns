@@ -1267,6 +1267,6 @@ func LogInfo(rrt *ResolverRuntime, format string, args ...interface{}) {
 			fmt.Printf(format+"\n", args...)
 			return
 		}
-		LogInfo(rrt, format, args...)
+		rrt.l.Infof(format, args...)
 	}
 }
