@@ -21,8 +21,9 @@ import (
 )
 
 const (
-	NOLOGS     = false
-	PRINTFLOGS = true
+	NOLOGS        = true
+	PRINTFLOGS    = false
+	NOPARALLELISM = false
 )
 
 const (
@@ -165,7 +166,9 @@ func resolveParallelHarness(rrt *ResolverRuntime, target []*dns.NS) (result []*e
 	for _, ns := range target {
 		input = append(input, newDNSQuery(ns.Ns, dns.TypeA))
 	}
-	input = []*dns.Msg{input[0]}
+	if NOPARALLELISM {
+		input = []*dns.Msg{input[0]}
+	}
 	achan := make(chan *dns.Msg, len(input))
 	for _, q := range input {
 		go func(question *dns.Msg) {
@@ -207,7 +210,11 @@ func doQueryParallelHarness(rrt *ResolverRuntime, targetServers []*entity, qname
 	if targetServers[0].zone == "." {
 		return doQuery(rrt, targetServers[0], qname, qtype)
 	}
-	diminishedTargetServers := []*entity{targetServers[0]}
+	diminishedTargetServers := targetServers
+	if NOPARALLELISM {
+		diminishedTargetServers = []*entity{targetServers[0]}
+	}
+
 	routinesDone := int32(0)
 	res := make(chan *parallelQueryResult, len(diminishedTargetServers))
 	for _, srv := range diminishedTargetServers {
@@ -403,7 +410,7 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 		rrt.l.Errorf("Error in recursive aspect. [%s]", err.Error())
 		return nil, err
 	}
-	// LogInfo(rrt, "DNS query:\n[%s]", res.String())
+	LogInfo(rrt, "DNS query:\n[%s]", res.String())
 	/// no fatal error means we can proceed to DNSSEC validation
 	answerType := evaluateResponse(rrt, currentToken, qtype, isFinalQuestion, res)
 
@@ -412,6 +419,7 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 		/// we do a DS first (and the DS will be signed with parent DNSKEY) - this can be verified
 		/// we do a child zone DNSKEY - this can be verified, even if the RRSIG is signed with the queried key, because ve validate DNSKEY first, and then RRSIG
 		if answerType == RESPONSE_DELEGATION_AUTHORITATIVE && fetchRRByType(res, dns.TypeDS) == nil {
+			LogInfo(rrt, "Caught an authoritative delegation for [%s]", res.Question[0].String())
 			rrtDS := NewResolverRuntime(&runtime.Runtime{Cache: rrt.c, IPPool: rrt.p, SlackWH: rrt.f, Stats: rrt.s}, rrt.l, rrt.provider, newDNSQuery(currentToken, dns.TypeDS))
 			setupZone(rrtDS, currentToken, rrt.targetServers[currentZone])
 			Resolve(rrtDS)
@@ -680,6 +688,7 @@ func validateDNSSEC(rrt *ResolverRuntime, in *dns.Msg, currentZone string) bool 
 		})
 		LogInfo(rrt, "Trying to validate DNSKEYS [%v]", dks)
 		if !validateDNSKEY(rrt, currentZone, dks) {
+			LogInfo(rrt, "Unable to validate DNSKEYS!")
 			return false
 		}
 		/// we cache the DNSKEYS quickly, because we might need them before this function returns
@@ -701,6 +710,7 @@ func validateDNSSEC(rrt *ResolverRuntime, in *dns.Msg, currentZone string) bool 
 	// }
 	// LogInfo(rrt, "NSEC3 successfully validated")
 	if !validateRRSIG(rrt, currentZone, in) {
+		LogInfo(rrt, "Unable to validate RRSIGs!")
 		return false
 	}
 	LogInfo(rrt, "RRSIG successfully validated")
@@ -751,8 +761,7 @@ func validateDNSKEY(rrt *ResolverRuntime, currentZone string, dks []*dns.DNSKEY)
 /// --> for every RRSIG in set, try to validate the covered type array
 func validateRRSIG(rrt *ResolverRuntime, currentZone string, in *dns.Msg) bool {
 	LogInfo(rrt, "Entering validateRRSIG()")
-	// return true
-	rrFilter := map[uint16][]dns.RR{}
+	rrFilter := map[uint16]map[string][]dns.RR{}
 	rrHolder := [][]dns.RR{in.Answer, in.Ns, in.Extra}
 	rrSigs := fetchRRByType(in, dns.TypeRRSIG)
 	dnskeyMap := map[string][]dns.RR{}
@@ -771,7 +780,8 @@ func validateRRSIG(rrt *ResolverRuntime, currentZone string, in *dns.Msg) bool {
 			}
 		}
 	}
-
+	// LogInfo(rrt, "We have all the necessary DNSKEYS, we can resume validation.")
+	// LogInfo(rrt, "We have [%v]", dnskeyMap)
 	/// for every section, map the RRs and then try to validate them using the RRSIGs and DNSKEYS
 	/// on error return false without hesitation
 	/// algorith is as follows:
@@ -779,17 +789,20 @@ func validateRRSIG(rrt *ResolverRuntime, currentZone string, in *dns.Msg) bool {
 	/// when an RRSIG is found try to validate with all the covered records, or just the ones found since the last RRSIG (supports NSEC/NSEC3 signings)
 	for _, arr := range rrHolder {
 		rrNavigator(arr, func(rr dns.RR) int {
-			rrFilter[rr.Header().Rrtype] = append(rrFilter[rr.Header().Rrtype], rr)
+			if rrFilter[rr.Header().Rrtype] == nil {
+				rrFilter[rr.Header().Rrtype] = map[string][]dns.RR{}
+			}
+			rrFilter[rr.Header().Rrtype][rr.Header().Name] = append(rrFilter[rr.Header().Rrtype][rr.Header().Name], rr)
 			return RR_NAVIGATOR_NEXT
 		})
-		rrLFilter := map[uint16][]dns.RR{}
+		rrLFilter := map[uint16]map[string][]dns.RR{}
 		for _, rr := range arr {
 			if rrSig, ok := rr.(*dns.RRSIG); ok {
 				rrSigValid := false
 				for _, dks := range dnskeyMap[rrSig.SignerName] {
 					/// try to validate: signature isnt expired, validate with global or validate with local filter
 					if rrSig.ValidityPeriod(time.Now()) &&
-						(rrSig.Verify(dks.(*dns.DNSKEY), rrFilter[rrSig.TypeCovered]) == nil || rrSig.Verify(dks.(*dns.DNSKEY), rrLFilter[rrSig.TypeCovered]) == nil) {
+						(rrSig.Verify(dks.(*dns.DNSKEY), rrFilter[rrSig.TypeCovered][rrSig.Header().Name]) == nil || rrSig.Verify(dks.(*dns.DNSKEY), rrLFilter[rrSig.TypeCovered][rrSig.Header().Name]) == nil) {
 						rrSigValid = true
 						break
 					}
@@ -797,9 +810,12 @@ func validateRRSIG(rrt *ResolverRuntime, currentZone string, in *dns.Msg) bool {
 				if rrSigValid == false {
 					return false
 				}
-				rrLFilter = map[uint16][]dns.RR{}
+				rrLFilter = map[uint16]map[string][]dns.RR{}
 			} else {
-				rrLFilter[rr.Header().Rrtype] = append(rrLFilter[rr.Header().Rrtype], rr)
+				if rrLFilter[rr.Header().Rrtype] == nil {
+					rrLFilter[rr.Header().Rrtype] = map[string][]dns.RR{}
+				}
+				rrLFilter[rr.Header().Rrtype][rr.Header().Name] = append(rrLFilter[rr.Header().Rrtype][rr.Header().Name], rr)
 			}
 		}
 	}
@@ -945,7 +961,7 @@ func setupResult(rrt *ResolverRuntime, rcode int, opaqueResponse interface{}) (r
 	default:
 		ret = &dns.Msg{}
 	}
-	LogInfo(rrt, "Setting up result as answer to [%d] RC [%s]", rrt.original.Id, dns.RcodeToString[ret.Rcode])
+	LogInfo(rrt, "Setting up result as answer to Q [%s] Id [%d] RC [%s]", rrt.original.Question[0].String(), rrt.original.Id, dns.RcodeToString[ret.Rcode])
 	ret.SetRcode(rrt.original, rcode)
 	return
 }
