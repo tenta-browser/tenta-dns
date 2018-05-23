@@ -21,8 +21,8 @@ import (
 )
 
 const (
-	NOLOGS        = true
-	PRINTFLOGS    = false
+	NOLOGS        = false
+	PRINTFLOGS    = true
 	NOPARALLELISM = false
 )
 
@@ -427,7 +427,7 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 			setupZone(rrtDNSKEY, currentToken, rrt.targetServers[currentZone])
 			Resolve(rrtDNSKEY)
 		}
-		if e := validateDNSSEC(rrt, res, currentZone); !e {
+		if e := validateDNSSEC(rrt, res, currentZone, currentToken, answerType); !e {
 			/// validator returns error only on critical security issues only (which warrant an instant propagation of the error)
 			LogInfo(rrt, "Caught a bogus dnssec response!")
 			return setupResult(rrt, dns.RcodeServerFailure, nil), fmt.Errorf("bogus DNSSEC response")
@@ -491,7 +491,7 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 		LogInfo(rrt, "Got a NODATA. Caching and returning it.")
 		rrt.c.Insert(rrt.provider, currentToken, dns.TypeToRR[qtype](), &runtime.ItemCacheExtra{Nodata: true})
 		if doWeReturnDNSSEC(rrt) && isDNSSECResponse(res) {
-			return res, nil
+			return setupResult(rrt, res.Rcode, res), nil
 		} else {
 			retSoa := fetchRRByType(res, dns.TypeSOA)
 			return setupResult(rrt, dns.RcodeSuccess, retSoa[0]), nil
@@ -676,7 +676,7 @@ func redirectNavigator(start string, redirects []*dns.CNAME) string {
 }
 
 /// function to validate DNSSEC records
-func validateDNSSEC(rrt *ResolverRuntime, in *dns.Msg, currentZone string) bool {
+func validateDNSSEC(rrt *ResolverRuntime, in *dns.Msg, currentZone, currentToken string, responseType int) bool {
 	LogInfo(rrt, "Entering validateDNSSEC() with [%v] in zone [%s]", in.Question[0].String(), currentZone)
 	if dkrr := fetchRRByType(in, dns.TypeDNSKEY); dkrr != nil {
 		dks := []*dns.DNSKEY{}
@@ -701,14 +701,14 @@ func validateDNSSEC(rrt *ResolverRuntime, in *dns.Msg, currentZone string) bool 
 		// return RR_NAVIGATOR_NEXT
 		// })
 	}
-	// if !validateNSEC(rrt, in) {
-	// 	return false
-	// }
-	// LogInfo(rrt, "NSEC successfully validated")
-	// if !validateNSEC3(rrt, in) {
-	// 	return false
-	// }
-	// LogInfo(rrt, "NSEC3 successfully validated")
+	if !validateNSEC(rrt, in, currentZone, currentToken, responseType) {
+		return false
+	}
+	LogInfo(rrt, "NSEC successfully validated")
+	if !validateNSEC3(rrt, in, currentZone, currentToken, responseType) {
+		return false
+	}
+	LogInfo(rrt, "NSEC3 successfully validated")
 	if !validateRRSIG(rrt, currentZone, in) {
 		LogInfo(rrt, "Unable to validate RRSIGs!")
 		return false
@@ -834,24 +834,99 @@ func fetchRRByType(from *dns.Msg, tp uint16) (ret []dns.RR) {
 
 func validateNSEC(rrt *ResolverRuntime, in *dns.Msg, currentZone, currentToken string, responseType int) bool {
 	LogInfo(rrt, "Entering validateNSEC()")
-	nsec := []*dns.NSEC{}
-	rrNavigator(in, func(rr dns.RR) int {
+	nsecs := fetchRRByType(in, dns.TypeNSEC)
+	if nsecs == nil {
+		return true
+	}
+	expectWildcardDeny := true
+	if dns.CountLabel(currentToken) > dns.CountLabel(currentZone)+1 {
+		expectWildcardDeny = false
+	}
+	var wildcardDeny, encloseDeny, dataDeny *dns.NSEC
+	rrNavigator(nsecs, func(rr dns.RR) int {
 		if rr.Header().Rrtype == dns.TypeNSEC {
-			nsec = append(nsec, rr.(*dns.NSEC))
+			if rr.Header().Name == currentToken {
+				dataDeny = rr.(*dns.NSEC)
+			} else if rr.Header().Name == currentZone {
+				wildcardDeny = rr.(*dns.NSEC)
+			} else {
+				encloseDeny = rr.(*dns.NSEC)
+			}
 		}
 		return RR_NAVIGATOR_NEXT
 	})
-
-	switch responseType {
-	case RESPONSE_NXDOMAIN:
+	deniedRecord, deniedEnvelope := false, false
+	/// nxdomain check: did we get wildcard expansion denial, did we get enclosed type denial,
+	/// enclosed owner label comes before query token, enclosed next label comes after query token
+	if expectWildcardDeny && wildcardDeny == nil {
+		LogInfo(rrt, "WARNING!!! Expected a windcard denial, but haven't received one; this fails NSEC validation. (letting it slide now)")
+		///return false
 	}
 
-	return true
+	if encloseDeny != nil {
+
+		if strings.HasPrefix(encloseDeny.Hdr.Name, currentToken) {
+			LogInfo(rrt, "NSEC owner label includes query token integrally; this fails NSEC validation.")
+			return false
+		}
+
+		commonLeft, cli := commonPrefix(encloseDeny.Hdr.Name, currentToken)
+
+		if !(commonLeft == encloseDeny.Hdr.Name || encloseDeny.Hdr.Name[cli] < currentToken[cli]) {
+			LogInfo(rrt, "Query token comes alphabetically before NSEC owner label; this fails NSEC validation.")
+			return false
+		}
+
+		if strings.HasPrefix(currentToken, encloseDeny.NextDomain) {
+			LogInfo(rrt, "NSEC next domain included in query token integrally; this fails NSEC validation.")
+			return false
+		}
+
+		commonRight, cri := commonPrefix(encloseDeny.NextDomain, currentToken)
+
+		if !(commonRight == encloseDeny.NextDomain || currentToken[cri] < encloseDeny.NextDomain[cri]) {
+			LogInfo(rrt, "Query token comes alphabetically before NSEC owner label; this fails NSEC validation.")
+			return false
+		}
+		deniedEnvelope = true
+	}
+	/// nodata check: did we get data denial, did it deny the record type we queried for
+	if dataDeny != nil {
+		containsQType := false
+		for _, tp := range dataDeny.TypeBitMap {
+			if tp == in.Question[0].Qtype {
+				containsQType = true
+			}
+		}
+		if containsQType {
+			LogInfo(rrt, "NSEC record covers our queried type; this fails NSEC validation")
+			return false
+		}
+		deniedRecord = true
+	}
+
+	if deniedEnvelope || deniedRecord {
+		return true
+	}
+	return false
 }
 
 func validateNSEC3(rrt *ResolverRuntime, in *dns.Msg, currentZone, currentToken string, responseType int) bool {
 	LogInfo(rrt, "Entering validateNSEC3()")
 	return true
+}
+
+func commonPrefix(s1, s2 string) (string, int) {
+	min := len(s1)
+	if len(s2) < len(s1) {
+		min = len(s2)
+	}
+	for i := 0; i < min; i++ {
+		if s1[i] != s2[i] {
+			return s1[:i], i
+		}
+	}
+	return s1[:min], min
 }
 
 /// basic convenience for ranging through various RR collections
