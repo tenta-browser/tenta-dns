@@ -22,7 +22,7 @@ import (
 
 const (
 	NOLOGS        = false
-	PRINTFLOGS    = true
+	PRINTFLOGS    = false
 	NOPARALLELISM = false
 )
 
@@ -500,7 +500,7 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 		LogInfo(rrt, "Got an NXDOMAIN. Caching and returning it.")
 		rrt.c.Insert(rrt.provider, currentToken, dns.TypeToRR[qtype](), &runtime.ItemCacheExtra{Nxdomain: true})
 		if doWeReturnDNSSEC(rrt) && isDNSSECResponse(res) {
-			return res, nil
+			return setupResult(rrt, dns.RcodeNameError, res), nil
 		} else {
 			retSoa := fetchRRByType(res, dns.TypeSOA)
 			return setupResult(rrt, dns.RcodeNameError, retSoa[0]), nil
@@ -582,10 +582,10 @@ func evaluateResponse(rrt *ResolverRuntime, qname string, qtype uint16, isFinal 
 
 		/// check NODATA
 		if r.Answer == nil && hasSOA {
-			if isFinal {
-				return RESPONSE_NODATA
-			}
-			return RESPONSE_EMPTY_NON_TERMINAL
+			// if isFinal {
+			return RESPONSE_NODATA
+			// }
+			// return RESPONSE_EMPTY_NON_TERMINAL
 		}
 
 		/// check if it is a straight-forward answer
@@ -913,7 +913,93 @@ func validateNSEC(rrt *ResolverRuntime, in *dns.Msg, currentZone, currentToken s
 
 func validateNSEC3(rrt *ResolverRuntime, in *dns.Msg, currentZone, currentToken string, responseType int) bool {
 	LogInfo(rrt, "Entering validateNSEC3()")
-	return true
+	_nsec3s := fetchRRByType(in, dns.TypeNSEC3)
+	if _nsec3s == nil {
+		/// TODO: add a bit of nuance to this test
+		return true
+	}
+	nsec3s := []*dns.NSEC3{}
+	rrNavigator(_nsec3s, func(rr dns.RR) int {
+		if n, ok := rr.(*dns.NSEC3); ok {
+			nsec3s = append(nsec3s, n)
+		}
+		return RR_NAVIGATOR_NEXT
+	})
+
+	/// algorithm [rfc 7129]: we find the closest encloser, from there we find the next closer NSEC3, and finally we try to cover the wildcard prefixed to the closest encloser
+	/// if nothing fails, it means that all is okay
+	/// we have 3 cases: nxdomain (3 nsec3s), nodata (1 nsec3), referral with opt-out (2 nsec3, same as nxdomain, without wildcard denial)
+	providedClosestEncloserProof, providedWildcardProof, providedRecordNotAvailableProof := false, false, false
+
+	qname := strings.Split(strings.Trim(currentToken, "."), ".")
+	closestEncloser, nextCloser := "", ""
+	/// check for matching NSEC3 record
+	for _, nsec3 := range nsec3s {
+		if nsec3.Match(currentToken) {
+			if !isTypeCovered(nsec3, in.Question[0].Qtype) {
+				LogInfo(rrt, "we have found proof that the qtype is not present")
+				providedRecordNotAvailableProof = true
+				break
+			} else {
+				LogInfo(rrt, "we found a matching nsec3, and type is covered. this smells fishy, failing")
+				return false
+			}
+		}
+	}
+
+	/// we do the closest encloser test
+	for i := 0; i < len(qname); i++ {
+		for _, nsec3 := range nsec3s {
+			closestEncloser = strings.Join(qname[i:], ".") + "."
+			if nsec3.Match(closestEncloser) && i > 0 {
+				nextCloser = strings.Join(qname[i-1:], ".") + "."
+			}
+		}
+	}
+
+	if closestEncloser != "" {
+		for _, nsec3 := range nsec3s {
+			if nsec3.Cover(nextCloser) {
+				providedClosestEncloserProof = true
+			}
+			if nsec3.Cover("*." + closestEncloser) {
+				providedWildcardProof = true
+			}
+		}
+	}
+
+	switch responseType {
+	case RESPONSE_NXDOMAIN, RESPONSE_EMPTY_NON_TERMINAL:
+		LogInfo(rrt, "We have NXDOMAIN, and [%v]&&[%v]", providedClosestEncloserProof, providedWildcardProof)
+		return providedClosestEncloserProof && providedWildcardProof
+	case RESPONSE_NODATA:
+		LogInfo(rrt, "We have NODATA, and [%v]", providedRecordNotAvailableProof)
+		return providedRecordNotAvailableProof
+	case RESPONSE_DELEGATION, RESPONSE_DELEGATION_AUTHORITATIVE, RESPONSE_DELEGATION_GLUE:
+		LogInfo(rrt, "We have DELEGATION, and [%v]", providedClosestEncloserProof)
+		return providedClosestEncloserProof
+
+	}
+
+	return false
+}
+
+func isTypeCovered(nsecN dns.RR, tp uint16) bool {
+	switch r := nsecN.(type) {
+	case *dns.NSEC:
+		for _, rtp := range r.TypeBitMap {
+			if tp == rtp {
+				return true
+			}
+		}
+	case *dns.NSEC3:
+		for _, rtp := range r.TypeBitMap {
+			if tp == rtp {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func commonPrefix(s1, s2 string) (string, int) {
