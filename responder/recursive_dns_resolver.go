@@ -672,7 +672,7 @@ func evaluateResponse(rrt *ResolverRuntime, qname string, qtype uint16, isFinal 
 
 		/// check delegation
 		if hasNS {
-			if r.Authoritative {
+			if hasCommonElements(fetchRRByType(r, dns.TypeNS), rrt.targetServers[rrt.currentZone]) {
 				return RESPONSE_DELEGATION_AUTHORITATIVE
 			}
 			if cleanAdditionalSection(r.Extra) == nil {
@@ -695,6 +695,22 @@ func evaluateResponse(rrt *ResolverRuntime, qname string, qtype uint16, isFinal 
 	}
 
 	return RESPONSE_UNKNOWN
+}
+
+/// func used primarily (and solely) for checking whether a delegation to a sub-zone has the same servers as the parent zone
+func hasCommonElements(arr1 []dns.RR, arr2 []*entity) bool {
+	for _, _ns1 := range arr1 {
+		ns1, ok := _ns1.(*dns.NS)
+		if !ok {
+			continue
+		}
+		for _, ns2 := range arr2 {
+			if ns1.Ns == ns2.name {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 /// function that starts off at an owner name, and navigates all linked CNAME records given to reach the last CNAMEs reference field
