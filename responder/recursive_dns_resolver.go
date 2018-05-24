@@ -29,8 +29,8 @@ const (
 const (
 	RECURSIVE_DNS_UDP_SIZE                   = 4096
 	RECURSIVE_DNS_NETWORK_ERROR              = -1
-	RECURSIVE_DNS_WAIT_ON_RATELIMIT          = 500 /// millisec
-	RECURSIVE_DNS_NUM_BLOCKED_BEFORE_FAILURE = 2
+	RECURSIVE_DNS_WAIT_ON_RATELIMIT          = 5000 /// millisec
+	RECURSIVE_DNS_NUM_BLOCKED_BEFORE_FAILURE = 3
 )
 
 const (
@@ -195,8 +195,8 @@ func resolveParallelHarness(rrt *ResolverRuntime, target []*dns.NS) (result []*e
 			answer, _ := Resolve(NewResolverRuntime(&runtime.Runtime{Cache: rrt.c, IPPool: rrt.p, SlackWH: rrt.f, Stats: rrt.s}, rrt.l, rrt.provider, question))
 			if answer != nil {
 				answer.Question = question.Question
+				achan <- answer
 			}
-			achan <- answer
 		}(q)
 	}
 	counter := 0
@@ -602,11 +602,6 @@ func evaluateResponse(rrt *ResolverRuntime, qname string, qtype uint16, isFinal 
 		hasSOA := false
 		hasNS := false
 		hasOtherNS := false
-		// nsHolder := r.Ns
-		/// add extra condition to support NS records in Answer section without AA flag
-		// if r.Authoritative || r.Ns == nil {
-		// 	nsHolder = r.Answer
-		// }
 
 		rrNavigator(r, func(rr dns.RR) int {
 			if rr.Header().Rrtype == dns.TypeNS {
@@ -692,10 +687,6 @@ func evaluateResponse(rrt *ResolverRuntime, qname string, qtype uint16, isFinal 
 		}
 
 	} else if r.Rcode == dns.RcodeNameError {
-		/// the various cases of NXDOMAIN
-		// if !isFinal {
-		// 	return RESPONSE_EMPTY_NON_TERMINAL
-		// }
 		return RESPONSE_NXDOMAIN
 	} else if r.Rcode == dns.RcodeServerFailure {
 		/// hacky approach, TODO: figure out a way to track only the throttling servers (either update at goroutine level (needs rwmutex or syncmap), or propagate server info with response)
@@ -728,7 +719,7 @@ func validateDNSSEC(rrt *ResolverRuntime, in *dns.Msg, currentZone, currentToken
 	LogInfo(rrt, "Entering validateDNSSEC() with [%v] in zone [%s]", in.Question[0].String(), currentZone)
 	if dkrr := fetchRRByType(in, dns.TypeDNSKEY); dkrr != nil {
 		dks := []*dns.DNSKEY{}
-		var rrs *dns.RRSIG = nil
+		rrs := []*dns.RRSIG{}
 		rrNavigator(dkrr, func(rr dns.RR) int {
 			if rr.Header().Rrtype == dns.TypeDNSKEY {
 				dks = append(dks, rr.(*dns.DNSKEY))
@@ -737,16 +728,16 @@ func validateDNSSEC(rrt *ResolverRuntime, in *dns.Msg, currentZone, currentToken
 		})
 		rrNavigator(in, func(rr dns.RR) int {
 			if rr.Header().Rrtype == dns.TypeRRSIG && rr.(*dns.RRSIG).TypeCovered == dns.TypeDNSKEY {
-				rrs = rr.(*dns.RRSIG)
+				rrs = append(rrs, rr.(*dns.RRSIG))
 			}
 			return RR_NAVIGATOR_NEXT
 		})
-		if rrs == nil {
+		if len(rrs) == 0 {
 			LogInfo(rrt, "Cannot validate unsigned DNSKEYs (RRSIG missing)")
 			return false
 		}
 		LogInfo(rrt, "Trying to validate DNSKEYS [%v]", dks)
-		if !validateDNSKEY(rrt, currentZone, dks, rrs.KeyTag) {
+		if !validateDNSKEY(rrt, currentZone, dks, rrs) {
 			LogInfo(rrt, "Unable to validate DNSKEYS!")
 			return false
 		}
@@ -781,7 +772,7 @@ func validateDNSSEC(rrt *ResolverRuntime, in *dns.Msg, currentZone, currentToken
 /// get (via cache or network) DS records from parent zone
 /// sequentially try to validate every DNSKEY with one of the retrieved DSes
 /// fail if a DNSKEY can't be validated
-func validateDNSKEY(rrt *ResolverRuntime, currentZone string, dks []*dns.DNSKEY, rrsigKeyTag uint16) bool {
+func validateDNSKEY(rrt *ResolverRuntime, currentZone string, dks []*dns.DNSKEY, rss []*dns.RRSIG) bool {
 	LogInfo(rrt, "Entering validateDNSKEY() with [%s][%v]", currentZone, dks)
 	LogInfo(rrt, "Zones are [%v]", rrt.zones)
 	dss, err := fetchFromCacheOrNetwork(rrt, currentZone, dns.TypeDS)
@@ -792,27 +783,32 @@ func validateDNSKEY(rrt *ResolverRuntime, currentZone string, dks []*dns.DNSKEY,
 	LogInfo(rrt, "We fetched DS records [%v]", dss)
 
 	/// not necessarily the KSK (for example in a zone that covers two levels); it's the key that is validated by the parent DS, and which is used to sign the DNSKEY RRSet
-	var mainDNSKEY *dns.DNSKEY = nil
-	for _, dk := range dks {
-		if dk.KeyTag() == rrsigKeyTag {
-			mainDNSKEY = dk
+	mainDNSKEYs := []*dns.DNSKEY{}
+	for _, rrsig := range rss {
+		for _, dk := range dks {
+			if dk.KeyTag() == rrsig.KeyTag {
+				mainDNSKEYs = append(mainDNSKEYs, dk)
+			}
 		}
 	}
 
-	if mainDNSKEY == nil {
-		LogInfo(rrt, "Cannot find KSK. Failed DNSKEY validation.")
+	if len(mainDNSKEYs) == 0 {
+		LogInfo(rrt, "Cannot find DNSKEYS that signed the RRSet. Failed DNSKEY validation.")
 		return false
 	}
-	validated := false
-	rrNavigator(dss, func(rr dns.RR) int {
-		if rr.Header().Rrtype == dns.TypeDS && equalsDS(rr.(*dns.DS), mainDNSKEY.ToDS(rr.(*dns.DS).DigestType)) {
-			validated = true
-			return RR_NAVIGATOR_BREAK
+	validatedAtLeastOne := false
+	for _, dk := range mainDNSKEYs {
+		for _, ds := range dss {
+			if ds.Header().Rrtype == dns.TypeDS && equalsDS(ds.(*dns.DS), dk.ToDS(ds.(*dns.DS).DigestType)) {
+				validatedAtLeastOne = true
+			}
 		}
-		return RR_NAVIGATOR_NEXT
-	})
-
-	return validated
+	}
+	/// we can safely pass true back if we validate at least one DNSKEY, which signed the (whole) DNSKEY RRSet
+	/// attack vectors can be (but checked):
+	/// - injected bogus DNSKEY (would fail RRSIG validation down the line)
+	/// - RRSIG (which references DNSKEY) does not cover all the DNSKEYS (opens up injection vulnerability), would also fail RRSIG validation
+	return validatedAtLeastOne
 }
 
 /// validates RRSIG records
