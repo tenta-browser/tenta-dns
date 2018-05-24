@@ -21,8 +21,8 @@ import (
 )
 
 const (
-	NOLOGS        = true
-	PRINTFLOGS    = true
+	NOLOGS        = false
+	PRINTFLOGS    = false
 	NOPARALLELISM = true
 )
 
@@ -59,6 +59,21 @@ const (
 	RESPONSE_REDIRECT_GLUE
 	RESPONSE_THROTTLE_SUSPECT
 )
+
+var responseTypeToString = map[int]string{
+	RESPONSE_UNKNOWN:                  "unknown",
+	RESPONSE_ANSWER:                   "answer",
+	RESPONSE_ANSWER_REDIRECT:          "redirect",
+	RESPONSE_ANSWER_HIDDEN:            "lucky",
+	RESPONSE_DELEGATION:               "delegation",
+	RESPONSE_DELEGATION_GLUE:          "delegation/glue",
+	RESPONSE_DELEGATION_AUTHORITATIVE: "delegation/authoritative",
+	RESPONSE_NXDOMAIN:                 "nxdomain",
+	RESPONSE_NODATA:                   "nodata",
+	RESPONSE_REDIRECT:                 "redirect",
+	RESPONSE_REDIRECT_GLUE:            "redirect/glue",
+	RESPONSE_THROTTLE_SUSPECT:         "blocked",
+}
 
 var (
 	RESPONSE_EMPTY = [][]dns.RR{nil, nil, nil}
@@ -764,28 +779,28 @@ func validateDNSKEY(rrt *ResolverRuntime, currentZone string, dks []*dns.DNSKEY)
 		return false
 	}
 	LogInfo(rrt, "We fetched DS records [%v]", dss)
-	failed := false
-	rrNavigator(dss, func(dsRR dns.RR) int {
-		lSuccess := false
-		for _, dnskey := range dks {
-			ds := dsRR.(*dns.DS)
 
-			td := dnskey.ToDS(ds.DigestType)
-			if td != nil && equalsDS(td, ds) {
-				lSuccess = true
-				break
-			}
+	var ksk *dns.DNSKEY = nil
+	for _, dk := range dks {
+		if dk.Flags&dns.SEP > 0 {
+			ksk = dk
 		}
-		if lSuccess == false {
-			failed = true
+	}
+
+	if ksk == nil {
+		LogInfo(rrt, "Cannot find KSK. Failed DNSKEY validation.")
+		return false
+	}
+	validated := false
+	rrNavigator(dss, func(rr dns.RR) int {
+		if rr.Header().Rrtype == dns.TypeDS && equalsDS(rr.(*dns.DS), ksk.ToDS(rr.(*dns.DS).DigestType)) {
+			validated = true
 			return RR_NAVIGATOR_BREAK
 		}
 		return RR_NAVIGATOR_NEXT
 	})
-	if failed {
-		return false
-	}
-	return true
+
+	return validated
 }
 
 /// validates RRSIG records
@@ -1008,12 +1023,12 @@ func validateNSEC3(rrt *ResolverRuntime, in *dns.Msg, currentZone, currentToken 
 	case RESPONSE_NODATA:
 		LogInfo(rrt, "We have NODATA, and [%v]", providedRecordNotAvailableProof)
 		return providedRecordNotAvailableProof
-	case RESPONSE_DELEGATION, RESPONSE_DELEGATION_AUTHORITATIVE, RESPONSE_DELEGATION_GLUE:
+	case RESPONSE_DELEGATION, RESPONSE_DELEGATION_AUTHORITATIVE, RESPONSE_DELEGATION_GLUE, RESPONSE_ANSWER_HIDDEN:
 		LogInfo(rrt, "We have DELEGATION, and [%v]", providedClosestEncloserProof)
 		return providedClosestEncloserProof
 
 	}
-
+	LogInfo(rrt, "Returning, because answer type [%s] is not handled", responseTypeToString[responseType])
 	return false
 }
 
