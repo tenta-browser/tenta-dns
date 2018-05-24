@@ -978,9 +978,12 @@ func validateNSEC3(rrt *ResolverRuntime, in *dns.Msg, currentZone, currentToken 
 	/// if nothing fails, it means that all is okay
 	/// we have 3 cases: nxdomain (3 nsec3s), nodata (1 nsec3), referral with opt-out (2 nsec3, same as nxdomain, without wildcard denial)
 	providedClosestEncloserProof, providedWildcardProof, providedRecordNotAvailableProof := false, false, false
-
+	optoutZone := false
 	qname := strings.Split(strings.Trim(currentToken, "."), ".")
 	closestEncloser, nextCloser := "", ""
+	if nsec3s[0].Flags > 0 {
+		optoutZone = true
+	}
 	/// check for matching NSEC3 record
 	for _, nsec3 := range nsec3s {
 		if nsec3.Match(currentToken) {
@@ -1001,16 +1004,17 @@ func validateNSEC3(rrt *ResolverRuntime, in *dns.Msg, currentZone, currentToken 
 			closestEncloser = strings.Join(qname[i:], ".") + "."
 			if nsec3.Match(closestEncloser) && i > 0 {
 				nextCloser = strings.Join(qname[i-1:], ".") + "."
+				LogInfo(rrt, "Found CE [%s] and NC [%s]", closestEncloser, nextCloser)
 			}
 		}
 	}
 
 	if closestEncloser != "" {
 		for _, nsec3 := range nsec3s {
-			if nsec3.Cover(nextCloser) {
+			if nsec3.Cover(nextCloser) || strings.HasPrefix(nsec3.Hdr.Name, nsec3.NextDomain) {
 				providedClosestEncloserProof = true
 			}
-			if nsec3.Cover("*." + closestEncloser) {
+			if nsec3.Cover("*."+closestEncloser) || strings.HasPrefix(nsec3.Hdr.Name, nsec3.NextDomain) {
 				providedWildcardProof = true
 			}
 		}
@@ -1024,9 +1028,11 @@ func validateNSEC3(rrt *ResolverRuntime, in *dns.Msg, currentZone, currentToken 
 		LogInfo(rrt, "We have NODATA, and [%v]", providedRecordNotAvailableProof)
 		return providedRecordNotAvailableProof
 	case RESPONSE_DELEGATION, RESPONSE_DELEGATION_AUTHORITATIVE, RESPONSE_DELEGATION_GLUE, RESPONSE_ANSWER_HIDDEN:
-		LogInfo(rrt, "We have DELEGATION, and [%v]", providedClosestEncloserProof)
-		return providedClosestEncloserProof
-
+		LogInfo(rrt, "We have DELEGATION, and [this? %v][%v] or [this? %v][%v]", optoutZone, providedClosestEncloserProof, optoutZone, providedRecordNotAvailableProof)
+		if optoutZone {
+			return providedClosestEncloserProof
+		}
+		return providedRecordNotAvailableProof
 	}
 	LogInfo(rrt, "Returning, because answer type [%s] is not handled", responseTypeToString[responseType])
 	return false
