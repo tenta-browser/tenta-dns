@@ -23,7 +23,7 @@ import (
 const (
 	NOLOGS        = false
 	PRINTFLOGS    = false
-	NOPARALLELISM = true
+	NOPARALLELISM = false
 )
 
 const (
@@ -168,7 +168,7 @@ func doQuery(rrt *ResolverRuntime, targetServer *entity, qname string, qtype uin
 		e = fmt.Errorf("transport error during DNS exchange [%s]", e.Error())
 		return
 	}
-	LogInfo(rrt, "DNS query yields: [%v][%s]\n[%s]", rtt, targetServer, r.String())
+	// LogInfo(rrt, "DNS query yields: [%v][%s]\n[%s]", rtt, targetServer, r.String())
 	trans.c = r.Rcode
 	trans.r = rtt
 	appendTransaction(rrt, trans)
@@ -436,7 +436,7 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 	LogInfo(rrt, "DNS query:\n[%s]", res.String())
 	/// no fatal error means we can proceed to DNSSEC validation
 	answerType := evaluateResponse(rrt, currentToken, qtype, isFinalQuestion, res)
-
+	LogInfo(rrt, "We cannot be certain, but the answer looks like an [%s]", responseTypeToString[answerType])
 	if isDNSSECResponse(res) {
 		/// hack to support authoritative _delegation_ into child zone without DS record (and more importantly, with RRSIGS signed with child zone DNSKEY)
 		/// we do a DS first (and the DS will be signed with parent DNSKEY) - this can be verified
@@ -460,7 +460,7 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 	/// TODO: add record security check
 	cacheResponse(rrt, res)
 
-	if isFinalQuestion && answerType != RESPONSE_NODATA && answerType != RESPONSE_NXDOMAIN {
+	if !isFinalQuestion && answerType != RESPONSE_NODATA && answerType != RESPONSE_NXDOMAIN {
 		rrt.currentZone = currentToken
 	}
 
@@ -688,7 +688,7 @@ func evaluateResponse(rrt *ResolverRuntime, qname string, qtype uint16, isFinal 
 
 	} else if r.Rcode == dns.RcodeNameError {
 		return RESPONSE_NXDOMAIN
-	} else if r.Rcode == dns.RcodeServerFailure {
+	} else if r.Rcode == dns.RcodeServerFailure || r.Rcode == dns.RcodeRefused {
 		/// hacky approach, TODO: figure out a way to track only the throttling servers (either update at goroutine level (needs rwmutex or syncmap), or propagate server info with response)
 		rrt.blockTracker[qname]++
 		return RESPONSE_THROTTLE_SUSPECT
