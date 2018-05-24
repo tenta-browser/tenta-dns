@@ -728,14 +728,25 @@ func validateDNSSEC(rrt *ResolverRuntime, in *dns.Msg, currentZone, currentToken
 	LogInfo(rrt, "Entering validateDNSSEC() with [%v] in zone [%s]", in.Question[0].String(), currentZone)
 	if dkrr := fetchRRByType(in, dns.TypeDNSKEY); dkrr != nil {
 		dks := []*dns.DNSKEY{}
+		var rrs *dns.RRSIG = nil
 		rrNavigator(dkrr, func(rr dns.RR) int {
 			if rr.Header().Rrtype == dns.TypeDNSKEY {
 				dks = append(dks, rr.(*dns.DNSKEY))
 			}
 			return RR_NAVIGATOR_NEXT
 		})
+		rrNavigator(in, func(rr dns.RR) int {
+			if rr.Header().Rrtype == dns.TypeRRSIG && rr.(*dns.RRSIG).TypeCovered == dns.TypeDNSKEY {
+				rrs = rr.(*dns.RRSIG)
+			}
+			return RR_NAVIGATOR_NEXT
+		})
+		if rrs == nil {
+			LogInfo(rrt, "Cannot validate unsigned DNSKEYs (RRSIG missing)")
+			return false
+		}
 		LogInfo(rrt, "Trying to validate DNSKEYS [%v]", dks)
-		if !validateDNSKEY(rrt, currentZone, dks) {
+		if !validateDNSKEY(rrt, currentZone, dks, rrs.KeyTag) {
 			LogInfo(rrt, "Unable to validate DNSKEYS!")
 			return false
 		}
@@ -770,7 +781,7 @@ func validateDNSSEC(rrt *ResolverRuntime, in *dns.Msg, currentZone, currentToken
 /// get (via cache or network) DS records from parent zone
 /// sequentially try to validate every DNSKEY with one of the retrieved DSes
 /// fail if a DNSKEY can't be validated
-func validateDNSKEY(rrt *ResolverRuntime, currentZone string, dks []*dns.DNSKEY) bool {
+func validateDNSKEY(rrt *ResolverRuntime, currentZone string, dks []*dns.DNSKEY, rrsigKeyTag uint16) bool {
 	LogInfo(rrt, "Entering validateDNSKEY() with [%s][%v]", currentZone, dks)
 	LogInfo(rrt, "Zones are [%v]", rrt.zones)
 	dss, err := fetchFromCacheOrNetwork(rrt, currentZone, dns.TypeDS)
@@ -780,20 +791,21 @@ func validateDNSKEY(rrt *ResolverRuntime, currentZone string, dks []*dns.DNSKEY)
 	}
 	LogInfo(rrt, "We fetched DS records [%v]", dss)
 
-	var ksk *dns.DNSKEY = nil
+	/// not necessarily the KSK (for example in a zone that covers two levels); it's the key that is validated by the parent DS, and which is used to sign the DNSKEY RRSet
+	var mainDNSKEY *dns.DNSKEY = nil
 	for _, dk := range dks {
-		if dk.Flags&dns.SEP > 0 {
-			ksk = dk
+		if dk.KeyTag() == rrsigKeyTag {
+			mainDNSKEY = dk
 		}
 	}
 
-	if ksk == nil {
+	if mainDNSKEY == nil {
 		LogInfo(rrt, "Cannot find KSK. Failed DNSKEY validation.")
 		return false
 	}
 	validated := false
 	rrNavigator(dss, func(rr dns.RR) int {
-		if rr.Header().Rrtype == dns.TypeDS && equalsDS(rr.(*dns.DS), ksk.ToDS(rr.(*dns.DS).DigestType)) {
+		if rr.Header().Rrtype == dns.TypeDS && equalsDS(rr.(*dns.DS), mainDNSKEY.ToDS(rr.(*dns.DS).DigestType)) {
 			validated = true
 			return RR_NAVIGATOR_BREAK
 		}
