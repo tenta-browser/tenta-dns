@@ -458,7 +458,7 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 	}
 
 	/// TODO: add record security check
-	cacheResponse(rrt, res)
+	cacheResponse(rrt, res, answerType)
 
 	if !isFinalQuestion && answerType != RESPONSE_NODATA && answerType != RESPONSE_NXDOMAIN {
 		rrt.currentZone = currentToken
@@ -582,8 +582,8 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 // func negativeCacheMapKey(prefix, qname string, qtype )
 
 /// convenience func to store a response or all records from it
-func cacheResponse(rrt *ResolverRuntime, in *dns.Msg) {
-	if isDNSSECResponse(in) {
+func cacheResponse(rrt *ResolverRuntime, in *dns.Msg, responseType int) {
+	if isDNSSECResponse(in) && (fetchRRByType(in, in.Question[0].Qtype) != nil || fetchRRByType(in, dns.TypeCNAME) != nil) {
 		rrt.c.InsertResponse(rrt.provider, in.Question[0].Name, in)
 	}
 
@@ -690,6 +690,10 @@ func evaluateResponse(rrt *ResolverRuntime, qname string, qtype uint16, isFinal 
 		return RESPONSE_NXDOMAIN
 	} else if r.Rcode == dns.RcodeServerFailure || r.Rcode == dns.RcodeRefused {
 		/// hacky approach, TODO: figure out a way to track only the throttling servers (either update at goroutine level (needs rwmutex or syncmap), or propagate server info with response)
+		rrt.blockTracker[qname]++
+		return RESPONSE_THROTTLE_SUSPECT
+	} else if r.Rcode == dns.RcodeFormatError {
+		/// suppose that we managed to properly calculate qname, qtype and qclass; let's interpret formerr as a rate limiting technique
 		rrt.blockTracker[qname]++
 		return RESPONSE_THROTTLE_SUSPECT
 	}
@@ -930,13 +934,12 @@ func validateNSEC(rrt *ResolverRuntime, in *dns.Msg, currentZone, currentToken s
 	deniedRecord, deniedEnvelope := false, false
 	/// nxdomain check: did we get wildcard expansion denial, did we get enclosed type denial,
 	/// enclosed owner label comes before query token, enclosed next label comes after query token
-	if expectWildcardDeny && wildcardDeny == nil {
-		LogInfo(rrt, "WARNING!!! Expected a windcard denial, but haven't received one; this fails NSEC validation. (letting it slide now)")
-		///return false
-	}
-
 	if encloseDeny != nil {
 
+		if expectWildcardDeny && wildcardDeny == nil {
+			LogInfo(rrt, "WARNING!!! Expected a windcard denial, but haven't received one; this fails NSEC validation. (letting it slide now)")
+			///return false
+		}
 		if strings.HasPrefix(encloseDeny.Hdr.Name, currentToken) {
 			LogInfo(rrt, "NSEC owner label includes query token integrally; this fails NSEC validation.")
 			return false
@@ -964,16 +967,19 @@ func validateNSEC(rrt *ResolverRuntime, in *dns.Msg, currentZone, currentToken s
 	}
 	/// nodata check: did we get data denial, did it deny the record type we queried for
 	if dataDeny != nil {
-		containsQType := false
-		for _, tp := range dataDeny.TypeBitMap {
-			if tp == in.Question[0].Qtype {
-				containsQType = true
+		if responseType == RESPONSE_DELEGATION || responseType == RESPONSE_DELEGATION_AUTHORITATIVE || responseType == RESPONSE_DELEGATION_GLUE ||
+			responseType == RESPONSE_ANSWER_HIDDEN {
+			if isTypeCovered(dataDeny, dns.TypeDS) && isTypeCovered(dataDeny, dns.TypeNS) {
+				LogInfo(rrt, "DS&NS covered by NSEC. This is not a valid NODATA response.")
+				return false
+			}
+		} else {
+			if isTypeCovered(dataDeny, in.Question[0].Qtype) {
+				LogInfo(rrt, "Requested type [%s] is covered by NSEC. This is not a valid NODATA response.", dns.TypeToString[in.Question[0].Qtype])
+				return false
 			}
 		}
-		if containsQType {
-			LogInfo(rrt, "NSEC record covers our queried type; this fails NSEC validation")
-			return false
-		}
+
 		deniedRecord = true
 	}
 
