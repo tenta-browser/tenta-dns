@@ -7,6 +7,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -21,16 +22,31 @@ import (
 )
 
 const (
-	NOLOGS        = false
-	PRINTFLOGS    = false
-	NOPARALLELISM = false
+	LOGGING_NONE = iota
+	LOGGING_LOGRUS
+	LOGGING_PRINTF
+	LOGGING_FILE
 )
 
 const (
-	RECURSIVE_DNS_UDP_SIZE                   = 4096
-	RECURSIVE_DNS_NETWORK_ERROR              = -1
-	RECURSIVE_DNS_WAIT_ON_RATELIMIT          = 5000 /// millisec
-	RECURSIVE_DNS_NUM_BLOCKED_BEFORE_FAILURE = 3
+	THREADING_NONE = iota
+	THREADING_NETWORK_ONLY
+	THREADING_MAX
+)
+
+var (
+	THREADING = THREADING_NETWORK_ONLY
+	LOGGING   = LOGGING_LOGRUS
+)
+
+const (
+	RECURSIVE_DNS_UDP_SIZE                      = 4096
+	RECURSIVE_DNS_NETWORK_ERROR                 = -1
+	RECURSIVE_DNS_WAIT_ON_RATELIMIT             = 5000 /// millisec
+	RECURSIVE_DNS_NUM_BLOCKED_BEFORE_FAILURE    = 3
+	RECURSIVE_DNS_NUM_RECURSIONS_BEFORE_FAILURE = 30
+	RECURSIVE_DNS_ALLOW_ISLANDS_OF_SECURITY     = true
+	RECURSIVE_DNS_FILE_LOGGING_LOCATION         = "" /// folder in which to dump resolver debug files, when LOGGING_FILE is active
 )
 
 const (
@@ -99,6 +115,10 @@ type ResolverRuntime struct {
 	targetServers map[string][]*entity /// a zone string to available nameservers map (the first level, "." is filled automatically)
 	redirections  []*dns.CNAME         /// a collection of all the redirections (that ultimately will make it into the answer section) until an answer can be formulated
 	blockTracker  map[string]int       /// a map to track blocked requests
+	oomAlert      int32                /// contrary to what the name says, it's a counter for the number of recursions made (global, per request handler)
+	oomAlert2     int32                /// same as above, it detects loops in another aspect
+	fileLogger    *os.File             /// logger activated when LOGGING is LOGGING_FILE
+
 }
 
 /// this structure is about an entity, it's primary element is one IP
@@ -186,13 +206,27 @@ func resolveParallelHarness(rrt *ResolverRuntime, target []*dns.NS) (result []*e
 	for _, ns := range target {
 		input = append(input, newDNSQuery(ns.Ns, dns.TypeA))
 	}
-	if NOPARALLELISM {
-		input = []*dns.Msg{input[0]}
+	if THREADING != THREADING_MAX {
+		answer, _ := Resolve(NewResolverRuntime(&runtime.Runtime{Cache: rrt.c, IPPool: rrt.p, SlackWH: rrt.f, Stats: rrt.s}, rrt.l, rrt.provider, input[0], rrt.oomAlert, rrt.oomAlert2, rrt.fileLogger))
+		if answer != nil {
+			answer.Question = input[0].Question
+			if answer.Answer != nil {
+				for _, ans := range answer.Answer {
+					if a, ok := ans.(*dns.A); ok {
+						result = append(result, newEntity(a.Hdr.Name, a.A.String(), ""))
+					}
+				}
+			}
+		}
+		return
+	} else {
+		/// TODO make this a random two servers
+		input = input[:1]
 	}
 	achan := make(chan *dns.Msg, len(input))
 	for _, q := range input {
 		go func(question *dns.Msg) {
-			answer, _ := Resolve(NewResolverRuntime(&runtime.Runtime{Cache: rrt.c, IPPool: rrt.p, SlackWH: rrt.f, Stats: rrt.s}, rrt.l, rrt.provider, question))
+			answer, _ := Resolve(NewResolverRuntime(&runtime.Runtime{Cache: rrt.c, IPPool: rrt.p, SlackWH: rrt.f, Stats: rrt.s}, rrt.l, rrt.provider, question, rrt.oomAlert, rrt.oomAlert2, rrt.fileLogger))
 			if answer != nil {
 				answer.Question = question.Question
 				achan <- answer
@@ -229,21 +263,17 @@ func doQueryParallelHarness(rrt *ResolverRuntime, targetServers []*entity, qname
 	if len(targetServers) == 0 {
 		return nil, fmt.Errorf("there are no configured servers")
 	}
-	if targetServers[0].zone == "." {
+	if targetServers[0].zone == "." || THREADING == THREADING_NONE {
 		return doQuery(rrt, targetServers[0], qname, qtype)
-	}
-	diminishedTargetServers := targetServers
-	if NOPARALLELISM {
-		diminishedTargetServers = []*entity{targetServers[0]}
 	}
 
 	routinesDone := int32(0)
-	res := make(chan *parallelQueryResult, len(diminishedTargetServers))
-	for _, srv := range diminishedTargetServers {
+	res := make(chan *parallelQueryResult, len(targetServers))
+	for _, srv := range targetServers {
 		go func(thisEntity *entity) {
 			r, e := doQuery(rrt, thisEntity, qname, qtype)
 			res <- &parallelQueryResult{r, e}
-			if atomic.AddInt32(&routinesDone, 1) == int32(len(diminishedTargetServers)) {
+			if atomic.AddInt32(&routinesDone, 1) == int32(len(targetServers)) {
 				close(res)
 			}
 		}(srv)
@@ -251,7 +281,7 @@ func doQueryParallelHarness(rrt *ResolverRuntime, targetServers []*entity, qname
 	var r *parallelQueryResult
 	for r = range res {
 		if r.e != nil {
-			rrt.l.Errorf("Error in parallel doQuery [%s]", r.e.Error())
+			LogError(rrt, "Error in parallel doQuery [%s]", r.e.Error())
 			continue
 		}
 		if r.r.Rcode == dns.RcodeSuccess {
@@ -263,9 +293,10 @@ func doQueryParallelHarness(rrt *ResolverRuntime, targetServers []*entity, qname
 
 }
 
-func NewResolverRuntime(rt *runtime.Runtime, lg *logrus.Entry, provider string, incoming *dns.Msg) (rrt *ResolverRuntime) {
+func NewResolverRuntime(rt *runtime.Runtime, lg *logrus.Entry, provider string, incoming *dns.Msg, recursionStats, recursionStats2 int32, fileLogger *os.File) (rrt *ResolverRuntime) {
 	rrt = &ResolverRuntime{
 		c: rt.Cache, p: rt.IPPool, f: rt.SlackWH, s: rt.Stats, l: lg, original: incoming, provider: provider,
+		oomAlert: recursionStats, oomAlert2: recursionStats2, fileLogger: fileLogger,
 	}
 	LogInfo(rrt, "Constructing resolver context, for [%s]/[%s]/[%s]", provider, incoming.Question[0].Name, dns.TypeToString[incoming.Question[0].Qtype])
 	/// session setup
@@ -285,11 +316,20 @@ func NewResolverRuntime(rt *runtime.Runtime, lg *logrus.Entry, provider string, 
 // *outgoing* is only partially filled, RCODE and RRs are set, the rest is up to the caller.
 // Expects a fully setup *ResolverRuntime as input (see NewResolverRuntime())
 func Resolve(rrt *ResolverRuntime) (outgoing *dns.Msg, e error) {
+	if atomic.AddInt32(&rrt.oomAlert2, 1) > RECURSIVE_DNS_NUM_RECURSIONS_BEFORE_FAILURE {
+		LogError(rrt, "Dangerous number of resolves spawned for [%s/%s]. Pulling the plug.", rrt.domain, dns.TypeToString[rrt.record])
+		// os.Exit(2)
+		return nil, fmt.Errorf("exceeded number of permitted recursions")
+	}
+
 	LogInfo(rrt, "Starting a fresh resolve for [%s][%s], DO[%v]/CD[%v]", rrt.domain, dns.TypeToString[rrt.record], doWeReturnDNSSEC(rrt), doWeValidateDNSSEC(rrt))
 	/// first order of business, check the cache
 	/// and in order to do so, we do the following
 	/// check QTYPE for full domain in cache -- if we get a hit, then return it, if not:
 	/// recursively track back for NS records -- when we get a hit we continue the loop from there
+	if rrt.record == dns.TypeDS {
+		rrt.zones = rrt.zones[:len(rrt.zones)-1]
+	}
 	LogInfo(rrt, "Checking cache for exact match...")
 	targetRR, extra := rrt.c.Retrieve(rrt.provider, rrt.domain, rrt.record, doWeReturnDNSSEC(rrt))
 
@@ -298,7 +338,7 @@ func Resolve(rrt *ResolverRuntime) (outgoing *dns.Msg, e error) {
 	}
 
 	if isValidCacheResponse(targetRR, doWeReturnDNSSEC(rrt)) {
-		LogInfo(rrt, "Response can be formulated from cache.")
+		LogInfo(rrt, "Response can be formulated from cache. [%v]", targetRR)
 		return setupResult(rrt, dns.RcodeSuccess, targetRR), nil
 	} else {
 		LogInfo(rrt, "No exact match in cache. Improvising...")
@@ -392,6 +432,11 @@ func Resolve(rrt *ResolverRuntime) (outgoing *dns.Msg, e error) {
 /// operating principle: previous level has set up a list of NSes to question, so it will ask the question specific
 /// to its level, and analyze the response, set up the environment for the next invocation
 func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
+	if atomic.AddInt32(&rrt.oomAlert, 1) > RECURSIVE_DNS_NUM_RECURSIONS_BEFORE_FAILURE {
+		LogError(rrt, "Dangerous number of recursions for [%s/%s]. Pulling the plug.", rrt.domain, dns.TypeToString[rrt.record])
+		// os.Exit(2)
+		return nil, fmt.Errorf("exceeded number of permitted recursions")
+	}
 	/// level always shows what zone we have NSes set up. We can safely ask questions about the next token.
 	/// unless level == len(rrt.zones) (aka. iob error), which means we are at the final question
 	LogInfo(rrt, "Entering doQueryRecursively() with level [%d/%d]", _level, len(rrt.zones))
@@ -400,16 +445,25 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 		_level--
 	}
 	currentZone := rrt.currentZone
+	if _level >= len(rrt.zones)-1 {
+		LogError(rrt, "Not sure how this happened, but we are at level [%d]/[%d], isfinal [%v], currentZone is [%s], domain is [%s] and currentToken is IOB error",
+			_level, len(rrt.zones), isFinalQuestion, currentZone, rrt.domain)
+		return nil, fmt.Errorf("level calculation soft panic")
+	}
 	currentToken := rrt.zones[_level+1]
 	/// no more use of integer _level is allowed. Except when going deeper in recursion.
 
-	LogInfo(rrt, "CurrentZone [%s], CurrentToken [%s], isFinal [%v]", currentZone, currentToken, isFinalQuestion)
 	/// first of all, check the cache, and check if we're at the bottom level
 	/// if we're at bottom, we ask the final qtype, if not, we ask NS
 	qtype := dns.TypeNS
 	if isFinalQuestion {
 		qtype = rrt.record
+		/// need this hack because DS asks about child zone from parent zone (current token, current zone, and isfinal are not in sync)
+		if qtype == dns.TypeDS {
+			currentToken = rrt.domain
+		}
 	}
+	LogInfo(rrt, "CurrentZone [%s], CurrentToken [%s], isFinal [%v]", currentZone, currentToken, isFinalQuestion)
 	cachedRR, extra := rrt.c.Retrieve(rrt.provider, currentToken, qtype, doWeReturnDNSSEC(rrt))
 	if r, e, p := handleExtras(rrt, cachedRR, extra); p {
 		return r, e
@@ -430,9 +484,12 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 	res, err := doQueryParallelHarness(rrt, rrt.targetServers[currentZone], currentToken, qtype)
 	/// propagate back (this means, that all NSes returned an error)
 	if err != nil {
-		rrt.l.Errorf("Error in recursive aspect. [%s]", err.Error())
+		LogError(rrt, "Error in recursive aspect. [%s]", err.Error())
 		return nil, err
 	}
+
+	cosmetizeRecords(res)
+
 	LogInfo(rrt, "DNS query:\n[%s]", res.String())
 	/// no fatal error means we can proceed to DNSSEC validation
 	answerType := evaluateResponse(rrt, currentToken, qtype, isFinalQuestion, res)
@@ -443,11 +500,11 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 		/// we do a child zone DNSKEY - this can be verified, even if the RRSIG is signed with the queried key, because ve validate DNSKEY first, and then RRSIG
 		if answerType == RESPONSE_DELEGATION_AUTHORITATIVE && fetchRRByType(res, dns.TypeDS) == nil {
 			LogInfo(rrt, "Caught an authoritative delegation for [%s]", res.Question[0].String())
-			rrtDS := NewResolverRuntime(&runtime.Runtime{Cache: rrt.c, IPPool: rrt.p, SlackWH: rrt.f, Stats: rrt.s}, rrt.l, rrt.provider, newDNSQuery(currentToken, dns.TypeDS))
-			setupZone(rrtDS, currentToken, rrt.targetServers[currentZone])
+			rrtDS := NewResolverRuntime(&runtime.Runtime{Cache: rrt.c, IPPool: rrt.p, SlackWH: rrt.f, Stats: rrt.s}, rrt.l, rrt.provider, newDNSQuery(currentToken, dns.TypeDS), rrt.oomAlert, rrt.oomAlert2, rrt.fileLogger)
+			setupZone(rrtDS, currentToken, extractCommonElements(fetchRRByType(res, dns.TypeNS), rrt.targetServers[currentZone]))
 			Resolve(rrtDS)
-			rrtDNSKEY := NewResolverRuntime(&runtime.Runtime{Cache: rrt.c, IPPool: rrt.p, SlackWH: rrt.f, Stats: rrt.s}, rrt.l, rrt.provider, newDNSQuery(currentToken, dns.TypeDNSKEY))
-			setupZone(rrtDNSKEY, currentToken, rrt.targetServers[currentZone])
+			rrtDNSKEY := NewResolverRuntime(&runtime.Runtime{Cache: rrt.c, IPPool: rrt.p, SlackWH: rrt.f, Stats: rrt.s}, rrt.l, rrt.provider, newDNSQuery(currentToken, dns.TypeDNSKEY), rrt.oomAlert, rrt.oomAlert2, rrt.fileLogger)
+			setupZone(rrtDNSKEY, currentToken, extractCommonElements(fetchRRByType(res, dns.TypeNS), rrt.targetServers[currentZone]))
 			Resolve(rrtDNSKEY)
 		}
 		if e := validateDNSSEC(rrt, res, currentZone, currentToken, answerType); !e {
@@ -504,7 +561,7 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 		return doQueryRecursively(rrt, _level+1)
 	case RESPONSE_DELEGATION_AUTHORITATIVE:
 		LogInfo(rrt, "Got an authoritative delegation.")
-		rrt.targetServers[currentToken] = rrt.targetServers[currentZone]
+		rrt.targetServers[currentToken] = extractCommonElements(fetchRRByType(res, dns.TypeNS), rrt.targetServers[currentZone])
 		return doQueryRecursively(rrt, _level+1)
 	// case RESPONSE_EMPTY_NON_TERMINAL:
 	case RESPONSE_NODATA:
@@ -551,11 +608,26 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 			return RR_NAVIGATOR_NEXT
 		})
 		lastOwner := redirectNavigator(currentToken, cnames)
+		var redirectResult *dns.Msg
+		var err error
 
-		if redirectResult, err := Resolve(NewResolverRuntime(&runtime.Runtime{Cache: rrt.c, IPPool: rrt.p, SlackWH: rrt.f, Stats: rrt.s},
-			rrt.l, rrt.provider, newDNSQuery(lastOwner, rrt.record))); err != nil {
-			rrt.l.Errorf("Redirect resolution failed with [%s]", err.Error())
+		if res.Authoritative && strings.HasSuffix(lastOwner, res.Question[0].Name) {
+			/// an extra hack for `list.tmall.com` (CNAME resolve loop)
+			LogInfo(rrt, "Doing the CNAME redirection loop prevention")
+			rrtCNAME := NewResolverRuntime(&runtime.Runtime{Cache: rrt.c, IPPool: rrt.p, SlackWH: rrt.f, Stats: rrt.s}, rrt.l, rrt.provider, newDNSQuery(lastOwner, rrt.record), rrt.oomAlert, rrt.oomAlert2, rrt.fileLogger)
+			setupZone(rrtCNAME, lastOwner, rrt.targetServers[currentZone])
+			redirectResult, err = Resolve(rrtCNAME)
+		} else {
+			redirectResult, err = Resolve(NewResolverRuntime(&runtime.Runtime{Cache: rrt.c, IPPool: rrt.p, SlackWH: rrt.f, Stats: rrt.s},
+				rrt.l, rrt.provider, newDNSQuery(lastOwner, rrt.record), rrt.oomAlert, rrt.oomAlert2, rrt.fileLogger))
+		}
+
+		if err != nil {
+			LogError(rrt, "Redirect resolution failed with [%s]", err.Error())
 			return nil, err
+		} else if redirectResult == nil || redirectResult.Answer == nil {
+			LogError(rrt, "Redirect resolution turned up an empty answer. Q:[%s/%s]", lastOwner, dns.TypeToString[rrt.record])
+			return nil, fmt.Errorf("error occured during CNAME redirection")
 		} else {
 			LogInfo(rrt, "Redirect resolved successfully. Returning with added references.")
 			redirectResult.Answer = append(redirectResult.Answer, fetchRRByType(res, dns.TypeCNAME)...)
@@ -580,6 +652,24 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 ** Helper functions -- temporarily placed here
  */
 // func negativeCacheMapKey(prefix, qname string, qtype )
+
+/// function to uniformize domain names (lowercase) in specific records -- before any evaluation or logic is done
+func cosmetizeRecords(in *dns.Msg) {
+	rrNavigator(in, func(rr dns.RR) int {
+		/// if it's not an NSEC3 and it's not an NSEC3 covering RRSIG
+		if (rr.Header().Rrtype != dns.TypeNSEC3 && rr.Header().Rrtype != dns.TypeRRSIG) ||
+			(rr.Header().Rrtype == dns.TypeRRSIG && rr.(*dns.RRSIG).TypeCovered != dns.TypeNSEC3) {
+			rr.Header().Name = strings.ToLower(rr.Header().Name)
+		}
+		switch t := rr.(type) {
+		case *dns.NS:
+			t.Ns = strings.ToLower(t.Ns)
+		case *dns.CNAME:
+			t.Target = strings.ToLower(t.Target)
+		}
+		return RR_NAVIGATOR_NEXT
+	})
+}
 
 /// convenience func to store a response or all records from it
 func cacheResponse(rrt *ResolverRuntime, in *dns.Msg, responseType int) {
@@ -717,6 +807,21 @@ func hasCommonElements(arr1 []dns.RR, arr2 []*entity) bool {
 	return false
 }
 
+func extractCommonElements(arr1 []dns.RR, arr2 []*entity) (servers []*entity) {
+	for _, _ns1 := range arr1 {
+		ns1, ok := _ns1.(*dns.NS)
+		if !ok {
+			continue
+		}
+		for _, ns2 := range arr2 {
+			if ns1.Ns == ns2.name {
+				servers = append(servers, ns2)
+			}
+		}
+	}
+	return
+}
+
 /// function that starts off at an owner name, and navigates all linked CNAME records given to reach the last CNAMEs reference field
 func redirectNavigator(start string, redirects []*dns.CNAME) string {
 	for {
@@ -798,6 +903,12 @@ func validateDNSKEY(rrt *ResolverRuntime, currentZone string, dks []*dns.DNSKEY,
 	dss, err := fetchFromCacheOrNetwork(rrt, currentZone, dns.TypeDS)
 	if err != nil {
 		/// if we cannot produce DS records matching our DNSKEY, fail without question
+		LogError(rrt, "Cannot produce DS record. Cause [%s]. Checking whether we tolerate islands of security.", err.Error())
+		if RECURSIVE_DNS_ALLOW_ISLANDS_OF_SECURITY {
+			LogInfo(rrt, "We do, yay.")
+			return true
+		}
+		LogError(rrt, "We don't, failing this thread.")
 		return false
 	}
 	LogInfo(rrt, "We fetched DS records [%v]", dss)
@@ -851,8 +962,10 @@ func validateRRSIG(rrt *ResolverRuntime, currentZone string, in *dns.Msg) bool {
 		if _, ok := dnskeyMap[sigOwner]; !ok {
 			dnskeyMap[sigOwner], err = fetchFromCacheOrNetwork(rrt, sigOwner, dns.TypeDNSKEY)
 			if err != nil {
-				rrt.l.Errorf("Cannot fetch cache/network DNSKEY for zone [%s]: [%s]", currentZone, err.Error())
+				LogError(rrt, "Cannot fetch cache/network DNSKEY for zone [%s]: [%s]", currentZone, err.Error())
 				return false
+			} else {
+				LogInfo(rrt, "We did fetch the following keys \n [%v]", dnskeyMap[sigOwner])
 			}
 		}
 	}
@@ -878,9 +991,13 @@ func validateRRSIG(rrt *ResolverRuntime, currentZone string, in *dns.Msg) bool {
 				for _, dks := range dnskeyMap[rrSig.SignerName] {
 					/// try to validate: signature isnt expired, validate with global or validate with local filter
 					if rrSig.ValidityPeriod(time.Now()) &&
-						(rrSig.Verify(dks.(*dns.DNSKEY), rrFilter[rrSig.TypeCovered][rrSig.Header().Name]) == nil || rrSig.Verify(dks.(*dns.DNSKEY), rrLFilter[rrSig.TypeCovered][rrSig.Header().Name]) == nil) {
+						(rrSig.Verify(dks.(*dns.DNSKEY), rrFilter[rrSig.TypeCovered][rrSig.Header().Name]) == nil || rrSig.Verify(dks.(*dns.DNSKEY), rrLFilter[rrSig.TypeCovered][rrSig.Header().Name]) == nil ||
+							rrSig.Verify(dks.(*dns.DNSKEY), []dns.RR{dks}) == nil) {
 						rrSigValid = true
 						break
+					} else {
+						LogInfo(rrt, "[global filter] Tried to validate [%s]\n with key\n[%s]\nand records\n[%v]", rrSig.String(), dks.String(), rrFilter[rrSig.TypeCovered][rrSig.Header().Name])
+						LogInfo(rrt, "[local filter] Tried to validate [%s]\n with key\n[%s]\nand records\n[%v]", rrSig.String(), dks.String(), rrLFilter[rrSig.TypeCovered][rrSig.Header().Name])
 					}
 				}
 				if rrSigValid == false {
@@ -1010,6 +1127,7 @@ func validateNSEC3(rrt *ResolverRuntime, in *dns.Msg, currentZone, currentToken 
 	providedClosestEncloserProof, providedWildcardProof, providedRecordNotAvailableProof := false, false, false
 	optoutZone := false
 	qname := strings.Split(strings.Trim(currentToken, "."), ".")
+	qtype := in.Question[0].Qtype
 	closestEncloser, nextCloser := "", ""
 	if nsec3s[0].Flags > 0 {
 		optoutZone = true
@@ -1017,14 +1135,23 @@ func validateNSEC3(rrt *ResolverRuntime, in *dns.Msg, currentZone, currentToken 
 	/// check for matching NSEC3 record
 	for _, nsec3 := range nsec3s {
 		if nsec3.Match(currentToken) {
-			if !isTypeCovered(nsec3, in.Question[0].Qtype) {
-				LogInfo(rrt, "we have found proof that the qtype is not present")
-				providedRecordNotAvailableProof = true
-				break
+			if qtype == dns.TypeNS {
+				if !isTypeCovered(nsec3, dns.TypeNS) || !isTypeCovered(nsec3, dns.TypeDS) {
+					LogInfo(rrt, "we have found proof that the qtype is not present")
+					providedRecordNotAvailableProof = true
+					break
+				}
 			} else {
-				LogInfo(rrt, "we found a matching nsec3, and type is covered. this smells fishy, failing")
-				return false
+				if !isTypeCovered(nsec3, qtype) {
+					LogInfo(rrt, "we have found proof that the qtype is not present")
+					providedRecordNotAvailableProof = true
+					break
+				}
+
 			}
+
+			LogInfo(rrt, "we found a matching nsec3, and type is covered. this smells fishy, failing")
+			return false
 		}
 	}
 
@@ -1055,8 +1182,11 @@ func validateNSEC3(rrt *ResolverRuntime, in *dns.Msg, currentZone, currentToken 
 		LogInfo(rrt, "We have NXDOMAIN, and [%v]&&[%v]", providedClosestEncloserProof, providedWildcardProof)
 		return providedClosestEncloserProof && providedWildcardProof
 	case RESPONSE_NODATA:
-		LogInfo(rrt, "We have NODATA, and [%v]", providedRecordNotAvailableProof)
-		return providedRecordNotAvailableProof
+		if in.Question[0].Qtype != dns.TypeDS {
+			LogInfo(rrt, "We have NODATA, and [%v]", providedRecordNotAvailableProof)
+			return providedRecordNotAvailableProof
+		}
+		fallthrough
 	case RESPONSE_DELEGATION, RESPONSE_DELEGATION_AUTHORITATIVE, RESPONSE_DELEGATION_GLUE, RESPONSE_ANSWER_HIDDEN:
 		LogInfo(rrt, "We have DELEGATION, and [this? %v][%v] or [this? %v][%v]", optoutZone, providedClosestEncloserProof, optoutZone, providedRecordNotAvailableProof)
 		if optoutZone {
@@ -1292,7 +1422,7 @@ func fetchFromCacheOrNetwork(rrt *ResolverRuntime, zone string, record uint16) (
 	}
 
 	/// reaching this point means we cannot serve the answer from cache
-	networkDS, err := Resolve(NewResolverRuntime(&runtime.Runtime{Cache: rrt.c, IPPool: rrt.p, SlackWH: rrt.f, Stats: rrt.s}, rrt.l, rrt.provider, newDNSQuery(zone, record)))
+	networkDS, err := Resolve(NewResolverRuntime(&runtime.Runtime{Cache: rrt.c, IPPool: rrt.p, SlackWH: rrt.f, Stats: rrt.s}, rrt.l, rrt.provider, newDNSQuery(zone, record), rrt.oomAlert, rrt.oomAlert2, rrt.fileLogger))
 	if err != nil {
 		return nil, err
 	}
@@ -1327,7 +1457,7 @@ func fetchNSAsEntity(rrt *ResolverRuntime, zone string, resolveNS, resolveA bool
 			return nil
 		}
 		LogInfo(rrt, "fetchNSAsEntity: Retrieving NS records the hard way.")
-		resolvedNS, _ := Resolve(NewResolverRuntime(&runtime.Runtime{Cache: rrt.c, IPPool: rrt.p, SlackWH: rrt.f, Stats: rrt.s}, rrt.l, rrt.provider, newDNSQuery(zone, dns.TypeNS)))
+		resolvedNS, _ := Resolve(NewResolverRuntime(&runtime.Runtime{Cache: rrt.c, IPPool: rrt.p, SlackWH: rrt.f, Stats: rrt.s}, rrt.l, rrt.provider, newDNSQuery(zone, dns.TypeNS), rrt.oomAlert, rrt.oomAlert2, rrt.fileLogger))
 		/// check if we have glue records (if indeed we have, construct the entities array, and return it, else, pass the Ns array further down to processing)
 		for _, answer := range resolvedNS.Answer {
 			if ns, ok := answer.(*dns.NS); ok {
@@ -1523,11 +1653,27 @@ func getZoneAXFR(rt *runtime.Runtime, l *logrus.Entry, provider, zone string) er
 }
 
 func LogInfo(rrt *ResolverRuntime, format string, args ...interface{}) {
-	if !NOLOGS {
-		if PRINTFLOGS {
-			fmt.Printf(format+"\n", args...)
-			return
-		}
+	if LOGGING == LOGGING_NONE {
+		return
+	} else if LOGGING == LOGGING_PRINTF {
+		fmt.Printf(format+"\n", args...)
+		return
+	} else if LOGGING == LOGGING_LOGRUS {
 		rrt.l.Infof(format, args...)
+	} else {
+		rrt.fileLogger.WriteString(fmt.Sprintf(format+"\n", args...))
+	}
+}
+
+func LogError(rrt *ResolverRuntime, format string, args ...interface{}) {
+	if LOGGING == LOGGING_NONE {
+		return
+	} else if LOGGING == LOGGING_PRINTF {
+		fmt.Printf(format+"\n", args...)
+		return
+	} else if LOGGING == LOGGING_LOGRUS {
+		rrt.l.Errorf(format, args...)
+	} else {
+		rrt.fileLogger.WriteString(fmt.Sprintf(format+"\n", args...))
 	}
 }
