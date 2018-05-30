@@ -278,7 +278,7 @@ func doQueryParallelHarness(rrt *ResolverRuntime, targetServers []*entity, qname
 			}
 		}(srv)
 	}
-	var r *parallelQueryResult
+	var r, secondBest *parallelQueryResult
 	for r = range res {
 		if r.e != nil {
 			LogError(rrt, "Error in parallel doQuery [%s]", r.e.Error())
@@ -286,9 +286,15 @@ func doQueryParallelHarness(rrt *ResolverRuntime, targetServers []*entity, qname
 		}
 		if r.r.Rcode == dns.RcodeSuccess {
 			return r.r, r.e
+		} else {
+			secondBest = r
 		}
 	}
 	/// returns last erroneous result, for future reference
+	if r != nil && r.e != nil && secondBest != nil && secondBest.e == nil {
+		return secondBest.r, secondBest.e
+	}
+
 	return r.r, r.e
 
 }
@@ -482,43 +488,48 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 	}
 	/// at this point we know that we can't skip an rtt to the NSes
 	res, err := doQueryParallelHarness(rrt, rrt.targetServers[currentZone], currentToken, qtype)
+	answerType := RESPONSE_UNKNOWN
 	/// propagate back (this means, that all NSes returned an error)
 	if err != nil {
-		LogError(rrt, "Error in recursive aspect. [%s]", err.Error())
-		return nil, err
-	}
-
-	cosmetizeRecords(res)
-
-	LogInfo(rrt, "DNS query:\n[%s]", res.String())
-	/// no fatal error means we can proceed to DNSSEC validation
-	answerType := evaluateResponse(rrt, currentToken, qtype, isFinalQuestion, res)
-	LogInfo(rrt, "We cannot be certain, but the answer looks like an [%s]", responseTypeToString[answerType])
-	if isDNSSECResponse(res) {
-		/// hack to support authoritative _delegation_ into child zone without DS record (and more importantly, with RRSIGS signed with child zone DNSKEY)
-		/// we do a DS first (and the DS will be signed with parent DNSKEY) - this can be verified
-		/// we do a child zone DNSKEY - this can be verified, even if the RRSIG is signed with the queried key, because ve validate DNSKEY first, and then RRSIG
-		if answerType == RESPONSE_DELEGATION_AUTHORITATIVE && fetchRRByType(res, dns.TypeDS) == nil {
-			LogInfo(rrt, "Caught an authoritative delegation for [%s]", res.Question[0].String())
-			rrtDS := NewResolverRuntime(&runtime.Runtime{Cache: rrt.c, IPPool: rrt.p, SlackWH: rrt.f, Stats: rrt.s}, rrt.l, rrt.provider, newDNSQuery(currentToken, dns.TypeDS), rrt.oomAlert, rrt.oomAlert2, rrt.fileLogger)
-			setupZone(rrtDS, currentToken, extractCommonElements(fetchRRByType(res, dns.TypeNS), rrt.targetServers[currentZone]))
-			Resolve(rrtDS)
-			rrtDNSKEY := NewResolverRuntime(&runtime.Runtime{Cache: rrt.c, IPPool: rrt.p, SlackWH: rrt.f, Stats: rrt.s}, rrt.l, rrt.provider, newDNSQuery(currentToken, dns.TypeDNSKEY), rrt.oomAlert, rrt.oomAlert2, rrt.fileLogger)
-			setupZone(rrtDNSKEY, currentToken, extractCommonElements(fetchRRByType(res, dns.TypeNS), rrt.targetServers[currentZone]))
-			Resolve(rrtDNSKEY)
+		if strings.HasSuffix(err.Error(), "i/o timeout") {
+			answerType = RESPONSE_THROTTLE_SUSPECT
+		} else {
+			LogError(rrt, "Error in recursive aspect. [%s]", err.Error())
+			return nil, err
 		}
-		if e := validateDNSSEC(rrt, res, currentZone, currentToken, answerType); !e {
-			/// validator returns error only on critical security issues only (which warrant an instant propagation of the error)
-			LogInfo(rrt, "Caught a bogus dnssec response!")
-			return setupResult(rrt, dns.RcodeServerFailure, nil), fmt.Errorf("bogus DNSSEC response")
+	} else {
+		cosmetizeRecords(res)
+
+		LogInfo(rrt, "DNS query:\n[%s]", res.String())
+		/// no fatal error means we can proceed to DNSSEC validation
+		answerType = evaluateResponse(rrt, currentToken, qtype, isFinalQuestion, res)
+		LogInfo(rrt, "We cannot be certain, but the answer looks like an [%s]", responseTypeToString[answerType])
+		if isDNSSECResponse(res) {
+			/// hack to support authoritative _delegation_ into child zone without DS record (and more importantly, with RRSIGS signed with child zone DNSKEY)
+			/// we do a DS first (and the DS will be signed with parent DNSKEY) - this can be verified
+			/// we do a child zone DNSKEY - this can be verified, even if the RRSIG is signed with the queried key, because ve validate DNSKEY first, and then RRSIG
+			if answerType == RESPONSE_DELEGATION_AUTHORITATIVE && fetchRRByType(res, dns.TypeDS) == nil {
+				LogInfo(rrt, "Caught an authoritative delegation for [%s]", res.Question[0].String())
+				rrtDS := NewResolverRuntime(&runtime.Runtime{Cache: rrt.c, IPPool: rrt.p, SlackWH: rrt.f, Stats: rrt.s}, rrt.l, rrt.provider, newDNSQuery(currentToken, dns.TypeDS), rrt.oomAlert, rrt.oomAlert2, rrt.fileLogger)
+				setupZone(rrtDS, currentToken, extractCommonElements(fetchRRByType(res, dns.TypeNS), rrt.targetServers[currentZone]))
+				Resolve(rrtDS)
+				rrtDNSKEY := NewResolverRuntime(&runtime.Runtime{Cache: rrt.c, IPPool: rrt.p, SlackWH: rrt.f, Stats: rrt.s}, rrt.l, rrt.provider, newDNSQuery(currentToken, dns.TypeDNSKEY), rrt.oomAlert, rrt.oomAlert2, rrt.fileLogger)
+				setupZone(rrtDNSKEY, currentToken, extractCommonElements(fetchRRByType(res, dns.TypeNS), rrt.targetServers[currentZone]))
+				Resolve(rrtDNSKEY)
+			}
+			if e := validateDNSSEC(rrt, res, currentZone, currentToken, answerType); !e {
+				/// validator returns error only on critical security issues only (which warrant an instant propagation of the error)
+				LogInfo(rrt, "Caught a bogus dnssec response!")
+				return setupResult(rrt, dns.RcodeServerFailure, nil), fmt.Errorf("bogus DNSSEC response")
+			}
 		}
-	}
 
-	/// TODO: add record security check
-	cacheResponse(rrt, res, answerType)
+		/// TODO: add record security check
+		cacheResponse(rrt, res, answerType)
 
-	if !isFinalQuestion && answerType != RESPONSE_NODATA && answerType != RESPONSE_NXDOMAIN {
-		rrt.currentZone = currentToken
+		if !isFinalQuestion && answerType != RESPONSE_NODATA && answerType != RESPONSE_NXDOMAIN {
+			rrt.currentZone = currentToken
+		}
 	}
 
 	switch answerType {
@@ -754,7 +765,7 @@ func evaluateResponse(rrt *ResolverRuntime, qname string, qtype uint16, isFinal 
 
 		/// check for CNAMES (with or without additional info)
 		if hasCNAME {
-			if !hasNS {
+			if !hasNS && !hasOtherNS {
 				return RESPONSE_REDIRECT
 			}
 			return RESPONSE_REDIRECT_GLUE
@@ -989,10 +1000,14 @@ func validateRRSIG(rrt *ResolverRuntime, currentZone string, in *dns.Msg) bool {
 			if rrSig, ok := rr.(*dns.RRSIG); ok {
 				rrSigValid := false
 				for _, dks := range dnskeyMap[rrSig.SignerName] {
+					if dks.(*dns.DNSKEY).KeyTag() != rrSig.KeyTag {
+						continue
+					}
+					LogInfo(rrt, "Found KEY with tag [%d] :: [%s]", rrSig.KeyTag, dks.String())
 					/// try to validate: signature isnt expired, validate with global or validate with local filter
-					if rrSig.ValidityPeriod(time.Now()) &&
-						(rrSig.Verify(dks.(*dns.DNSKEY), rrFilter[rrSig.TypeCovered][rrSig.Header().Name]) == nil || rrSig.Verify(dks.(*dns.DNSKEY), rrLFilter[rrSig.TypeCovered][rrSig.Header().Name]) == nil ||
-							rrSig.Verify(dks.(*dns.DNSKEY), []dns.RR{dks}) == nil) {
+					if rrSig.ValidityPeriod(time.Now()) && (rrSig.Verify(dks.(*dns.DNSKEY), rrFilter[rrSig.TypeCovered][rrSig.Header().Name]) != nil ||
+						rrSig.Verify(dks.(*dns.DNSKEY), rrLFilter[rrSig.TypeCovered][rrSig.Header().Name]) != nil ||
+						rrSig.Verify(dks.(*dns.DNSKEY), []dns.RR{dks}) != nil) {
 						rrSigValid = true
 						break
 					} else {
@@ -1126,15 +1141,23 @@ func validateNSEC3(rrt *ResolverRuntime, in *dns.Msg, currentZone, currentToken 
 	/// we have 3 cases: nxdomain (3 nsec3s), nodata (1 nsec3), referral with opt-out (2 nsec3, same as nxdomain, without wildcard denial)
 	providedClosestEncloserProof, providedWildcardProof, providedRecordNotAvailableProof := false, false, false
 	optoutZone := false
-	qname := strings.Split(strings.Trim(currentToken, "."), ".")
+	ownerToDeny := currentToken
+	if responseType == RESPONSE_REDIRECT_GLUE {
+		cnameNS := fetchRRByType(in, dns.TypeNS)
+		if len(cnameNS) != 0 {
+			ownerToDeny = cnameNS[0].Header().Name
+		}
+	}
+	qname := strings.Split(strings.Trim(ownerToDeny, "."), ".")
 	qtype := in.Question[0].Qtype
 	closestEncloser, nextCloser := "", ""
 	if nsec3s[0].Flags > 0 {
 		optoutZone = true
 	}
+	LogInfo(rrt, "We try to validate NSEC3 using token [%s]", ownerToDeny)
 	/// check for matching NSEC3 record
 	for _, nsec3 := range nsec3s {
-		if nsec3.Match(currentToken) {
+		if nsec3.Match(ownerToDeny) {
 			if qtype == dns.TypeNS {
 				if !isTypeCovered(nsec3, dns.TypeNS) || !isTypeCovered(nsec3, dns.TypeDS) {
 					LogInfo(rrt, "we have found proof that the qtype is not present")
@@ -1176,7 +1199,7 @@ func validateNSEC3(rrt *ResolverRuntime, in *dns.Msg, currentZone, currentToken 
 			}
 		}
 	}
-
+	LogInfo(rrt, "We have closestencloser proof [%v] | wildcard proof [%v] | record na [%v]", providedClosestEncloserProof, providedWildcardProof, providedRecordNotAvailableProof)
 	switch responseType {
 	case RESPONSE_NXDOMAIN:
 		LogInfo(rrt, "We have NXDOMAIN, and [%v]&&[%v]", providedClosestEncloserProof, providedWildcardProof)
@@ -1192,6 +1215,8 @@ func validateNSEC3(rrt *ResolverRuntime, in *dns.Msg, currentZone, currentToken 
 		if optoutZone {
 			return providedClosestEncloserProof
 		}
+		return providedRecordNotAvailableProof
+	case RESPONSE_REDIRECT_GLUE:
 		return providedRecordNotAvailableProof
 	}
 	LogInfo(rrt, "Returning, because answer type [%s] is not handled", responseTypeToString[responseType])
