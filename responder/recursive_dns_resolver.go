@@ -664,6 +664,21 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
  */
 // func negativeCacheMapKey(prefix, qname string, qtype )
 
+/// remove DNSSEC records from *Msg
+func removeDNSSECRecords(in *dns.Msg) {
+	for _, holder := range []*[]dns.RR{&in.Answer, &in.Ns, &in.Extra} {
+		temp := []dns.RR{}
+		rrNavigator(holder, func(rr dns.RR) int {
+			if !(rr.Header().Rrtype == dns.TypeRRSIG || rr.Header().Rrtype == dns.TypeNSEC || rr.Header().Rrtype == dns.TypeNSEC3 ||
+				rr.Header().Rrtype == dns.TypeNSEC3PARAM || rr.Header().Rrtype == dns.TypeDS) {
+				temp = append(temp, rr)
+			}
+			return RR_NAVIGATOR_NEXT
+		})
+		*holder = temp
+	}
+}
+
 /// function to uniformize domain names (lowercase) in specific records -- before any evaluation or logic is done
 func cosmetizeRecords(in *dns.Msg) {
 	rrNavigator(in, func(rr dns.RR) int {

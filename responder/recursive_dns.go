@@ -1808,7 +1808,7 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 
 	l := loggy
 	return func(w dns.ResponseWriter, r *dns.Msg) {
-		startTime := time.Now()
+		// startTime := time.Now()
 		rt.Stats.Count(StatsQueryTotal)
 		if network == "udp" {
 			rt.Stats.Count(StatsQueryUDP)
@@ -1851,50 +1851,70 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 		}
 
 		l = l.WithField("domain", r.Question[0].Name)
-		elogger := new(nlog.EventualLogger)
-		elogger.Queuef("%v -- STARTING NEW TOPLEVEL RESOLVE FOR [%s][RecDesired - %v]", time.Now(), r.Question[0].Name, r.RecursionDesired)
-		qp := newQueryParam(r.Question[0].Name, r.Question[0].Qtype, l, elogger, provider, rt, new(ExchangeHistory))
-		qp.CDFlagSet = r.CheckingDisabled
-		resolveMethodToUse := resolveMethodRecursive
-		if r.RecursionDesired == false {
-			resolveMethodToUse = resolveMethodCacheOnly
+		fLogger, _ := os.Create(RECURSIVE_DNS_FILE_LOGGING_LOCATION + r.Question[0].Name + "." + dns.TypeToString[r.Question[0].Qtype])
+		rrt := NewResolverRuntime(rt, l, provider, r, 0, 0, fLogger)
+		result, e := Resolve(rrt)
+		if e != nil {
+			result = setupResult(rrt, dns.RcodeServerFailure, nil)
 		}
-		qp.chainOfTrustIntact = *dnssecEnabled
-		answer, err := qp.doResolve(resolveMethodToUse)
-		resolvTime := time.Now().Sub(startTime)
-		response := new(dns.Msg)
-		if err != nil {
-			elogger.Queuef("RESOLVE RETURNED ERROR [%s]", err.String())
-			if err.errorCode != errorUnresolvable {
-				elogger.Queuef("Failed for [%s -- %d] - [%s]", qp.vanilla, qp.record, err)
-				rt.Stats.Count(StatsQueryFailure)
-				response.SetRcode(r, dns.RcodeServerFailure)
-				/// supress error messages about failed PTR lookups, and queries with RD unset
-				if r.Question[0].Qtype != dns.TypePTR && r.RecursionDesired {
-					rt.SlackWH.SendFeedback(runtime.NewPayload(operatorID, fmt.Sprintf("%s [%s/RD=%v/CD=%v]",
-						qp.vanilla, dns.TypeToString[r.Question[0].Qtype], r.RecursionDesired, r.CheckingDisabled), err.String(), ""))
-				}
-				elogger.Flush(l)
-			} else {
-				elogger.Queuef("[%s -- %d] unresolvable.", qp.vanilla, qp.record)
-				response.SetRcode(r, dns.RcodeNameError)
-			}
-		} else {
-			elogger.Queuef("ANSWER is: [%v][%v][%s]", resolvTime, qp.timeWasted, answer)
-			response.SetRcode(r, dns.RcodeSuccess)
-		}
+		if !doWeReturnDNSSEC(rrt) && isDNSSECResponse(result) {
+			removeDNSSECRecords(result)
 
-		elogger.Queuef("\nTransaction history:\n%s\n", qp.exchangeHistory)
-		response.RecursionAvailable = true
-		if qp.chainOfTrustIntact && qp.CDFlagSet != true {
-			response.AuthenticatedData = true
 		}
-		response.Compress = true
-		response.Answer = answer
-		response.Ns = *qp.authority
-		response.Extra = *qp.additional
-		response.SetEdns0(4096, false)
-		w.WriteMsg(response)
+		result.SetEdns0(RECURSIVE_DNS_UDP_SIZE, doWeReturnDNSSEC(rrt))
+		result.RecursionAvailable = true
+		result.AuthenticatedData = doWeTouchADFlag(rrt)
+		result.Compress = true
+		w.WriteMsg(result)
+		return
+
+		/*
+			elogger := new(nlog.EventualLogger)
+			elogger.Queuef("%v -- STARTING NEW TOPLEVEL RESOLVE FOR [%s][RecDesired - %v]", time.Now(), r.Question[0].Name, r.RecursionDesired)
+			qp := newQueryParam(r.Question[0].Name, r.Question[0].Qtype, l, elogger, provider, rt, new(ExchangeHistory))
+			qp.CDFlagSet = r.CheckingDisabled
+			resolveMethodToUse := resolveMethodRecursive
+			if r.RecursionDesired == false {
+				resolveMethodToUse = resolveMethodCacheOnly
+			}
+			qp.chainOfTrustIntact = *dnssecEnabled
+			answer, err := qp.doResolve(resolveMethodToUse)
+			resolvTime := time.Now().Sub(startTime)
+			response := new(dns.Msg)
+			if err != nil {
+				elogger.Queuef("RESOLVE RETURNED ERROR [%s]", err.String())
+				if err.errorCode != errorUnresolvable {
+					elogger.Queuef("Failed for [%s -- %d] - [%s]", qp.vanilla, qp.record, err)
+					rt.Stats.Count(StatsQueryFailure)
+					response.SetRcode(r, dns.RcodeServerFailure)
+					/// supress error messages about failed PTR lookups, and queries with RD unset
+					if r.Question[0].Qtype != dns.TypePTR && r.RecursionDesired {
+						rt.SlackWH.SendFeedback(runtime.NewPayload(operatorID, fmt.Sprintf("%s [%s/RD=%v/CD=%v]",
+							qp.vanilla, dns.TypeToString[r.Question[0].Qtype], r.RecursionDesired, r.CheckingDisabled), err.String(), ""))
+					}
+					elogger.Flush(l)
+				} else {
+					elogger.Queuef("[%s -- %d] unresolvable.", qp.vanilla, qp.record)
+					response.SetRcode(r, dns.RcodeNameError)
+				}
+			} else {
+				elogger.Queuef("ANSWER is: [%v][%v][%s]", resolvTime, qp.timeWasted, answer)
+				response.SetRcode(r, dns.RcodeSuccess)
+			}
+
+			elogger.Queuef("\nTransaction history:\n%s\n", qp.exchangeHistory)
+			elogger.Flush(l)
+			response.RecursionAvailable = true
+			if qp.chainOfTrustIntact && qp.CDFlagSet != true {
+				response.AuthenticatedData = true
+			}
+			response.Compress = true
+			response.Answer = answer
+			response.Ns = *qp.authority
+			response.Extra = *qp.additional
+			response.SetEdns0(4096, false)
+			w.WriteMsg(response)
+		*/
 	}
 }
 
@@ -1932,13 +1952,16 @@ func ServeDNS(cfg runtime.RecursorConfig, rt *runtime.Runtime, v4 bool, net stri
 		}
 	}()
 
-	if dnssecMode {
-		if e := getTrustedRootAnchors(lg, provider, rt); e != nil {
-			panic(fmt.Sprintf("Cannot obtain root trust anchors. [%v]\n", e))
-		}
-	}
+	// if dnssecMode {
+	// if e := getTrustedRootAnchors(lg, provider, rt); e != nil {
+	// 		panic(fmt.Sprintf("Cannot obtain root trust anchors. [%v]\n", e))
+	// 	}
+	// }
 
-	transferRootZone(lg, provider)
+	// transferRootZone(lg, provider)
+
+	getRootTrustAnchors(rt, lg, provider)
+	getZoneAXFR(rt, lg, provider, ".")
 
 	if net == "tls" {
 		go func() {
