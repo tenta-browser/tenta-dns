@@ -1854,7 +1854,7 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 		fLogger, _ := os.Create(RECURSIVE_DNS_FILE_LOGGING_LOCATION + r.Question[0].Name + "." + dns.TypeToString[r.Question[0].Qtype])
 		rrt := NewResolverRuntime(rt, l, provider, r, 0, 0, fLogger)
 		result, e := Resolve(rrt)
-		if e != nil {
+		if e != nil || result == nil {
 			result = setupResult(rrt, dns.RcodeServerFailure, nil)
 		}
 		if !doWeReturnDNSSEC(rrt) && isDNSSECResponse(result) {

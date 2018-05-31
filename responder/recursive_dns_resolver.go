@@ -35,8 +35,8 @@ const (
 )
 
 var (
-	THREADING = THREADING_NETWORK_ONLY
-	LOGGING   = LOGGING_PRINTF
+	THREADING = THREADING_NONE
+	LOGGING   = LOGGING_FILE
 )
 
 const (
@@ -79,7 +79,7 @@ const (
 var responseTypeToString = map[int]string{
 	RESPONSE_UNKNOWN:                  "unknown",
 	RESPONSE_ANSWER:                   "answer",
-	RESPONSE_ANSWER_REDIRECT:          "redirect",
+	RESPONSE_ANSWER_REDIRECT:          "answer/redirect",
 	RESPONSE_ANSWER_HIDDEN:            "lucky",
 	RESPONSE_DELEGATION:               "delegation",
 	RESPONSE_DELEGATION_GLUE:          "delegation/glue",
@@ -175,10 +175,12 @@ func (e *entity) String() string {
 func doQuery(rrt *ResolverRuntime, targetServer *entity, qname string, qtype uint16) (r *dns.Msg, e error) {
 	LogInfo(rrt, "Entering doQuery() with [%s][%s] -- [%v]", qname, dns.TypeToString[qtype], targetServer)
 	c, p := setupClient(rrt, targetServer)
+	c.Timeout = 5 * time.Second
 	m := new(dns.Msg)
 	m.SetQuestion(qname, qtype).SetEdns0(RECURSIVE_DNS_UDP_SIZE, true)
 	m.Compress = true
 	m.RecursionDesired = false
+
 	trans := &transaction{e: targetServer, q: qname, t: qtype}
 	LogInfo(rrt, "Executing query [%s] -- [%s]", net.JoinHostPort(targetServer.ip, p), m.Question[0].String())
 	r, rtt, e := c.Exchange(m, net.JoinHostPort(targetServer.ip, p))
@@ -431,7 +433,9 @@ func Resolve(rrt *ResolverRuntime) (outgoing *dns.Msg, e error) {
 	}
 
 	/// do the actual recursion
-	return doQueryRecursively(rrt, entryPoint)
+	outgoing, e = doQueryRecursively(rrt, entryPoint)
+	LogInfo(rrt, "We have a RESOLVE result\n[%p]%v\n", outgoing, outgoing)
+	return
 }
 
 /// function for recursive invocation. handles one level of the query hierarchy, calls itself for next level
@@ -491,7 +495,8 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 	answerType := RESPONSE_UNKNOWN
 	/// propagate back (this means, that all NSes returned an error)
 	if err != nil {
-		if strings.HasSuffix(err.Error(), "i/o timeout") {
+		if strings.Contains(err.Error(), "i/o timeout") {
+			LogInfo(rrt, "We have a timeout which is considered as a throttle attempt")
 			answerType = RESPONSE_THROTTLE_SUSPECT
 		} else {
 			LogError(rrt, "Error in recursive aspect. [%s]", err.Error())
@@ -533,9 +538,11 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 	}
 
 	switch answerType {
-	case RESPONSE_ANSWER:
+	case RESPONSE_ANSWER, RESPONSE_ANSWER_REDIRECT:
 		LogInfo(rrt, "Got an answer. Returning it.")
-		return setupResult(rrt, dns.RcodeSuccess, res), nil
+		tmp := setupResult(rrt, dns.RcodeSuccess, res)
+		LogInfo(rrt, "The answer in question is [%p][%v]\n", tmp, tmp)
+		return tmp, nil
 	case RESPONSE_DELEGATION:
 		LogInfo(rrt, "Got a naked delegation.")
 		nsRR := []*dns.NS{}
@@ -1371,13 +1378,20 @@ func setupResult(rrt *ResolverRuntime, rcode int, opaqueResponse interface{}) (r
 	case dns.RR: /// single RR means a SOA for nxdomain/nodata responses
 		ret = &dns.Msg{Ns: []dns.RR{t}}
 	case *dns.Msg:
-		t.Rcode = rcode
-		ret = t
+		//t.Rcode = rcode
+		ret = &dns.Msg{MsgHdr: t.MsgHdr, Answer: cloneSection(t.Answer), Ns: cloneSection(t.Ns), Extra: cloneSection(t.Extra)}
 	default:
 		ret = &dns.Msg{}
 	}
-	LogInfo(rrt, "Setting up result as answer to Q [%s] Id [%d] RC [%s]", rrt.original.Question[0].String(), rrt.original.Id, dns.RcodeToString[ret.Rcode])
 	ret.SetRcode(rrt.original, rcode)
+	LogInfo(rrt, "Setting up result as answer to Q [%s] Id [%d] RC [%s]\n[%v]\n\n", rrt.original.Question[0].String(), rrt.original.Id, dns.RcodeToString[ret.Rcode], ret)
+	return
+}
+
+func cloneSection(s []dns.RR) (out []dns.RR) {
+	for _, rr := range s {
+		out = append(out, dns.Copy(rr))
+	}
 	return
 }
 
@@ -1465,6 +1479,8 @@ func fetchFromCacheOrNetwork(rrt *ResolverRuntime, zone string, record uint16) (
 	networkDS, err := Resolve(NewResolverRuntime(&runtime.Runtime{Cache: rrt.c, IPPool: rrt.p, SlackWH: rrt.f, Stats: rrt.s}, rrt.l, rrt.provider, newDNSQuery(zone, record), rrt.oomAlert, rrt.oomAlert2, rrt.fileLogger))
 	if err != nil {
 		return nil, err
+	} else if networkDS == nil {
+		return nil, fmt.Errorf("cannot produce requested record")
 	}
 	ret = fetchRRByType(networkDS, record)
 	if len(ret) == 0 {
