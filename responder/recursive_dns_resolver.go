@@ -188,7 +188,7 @@ func doQuery(rrt *ResolverRuntime, targetServer *entity, qname string, qtype uin
 	m.RecursionDesired = false
 
 	trans := &transaction{e: targetServer, q: qname, t: qtype}
-	LogInfo(rrt, "Executing query [%s] -- [%s]", net.JoinHostPort(targetServer.ip, p), m.Question[0].String())
+	LogInfo(rrt, "Executing query [%s][%s] -- [%s]", c.Net, net.JoinHostPort(targetServer.ip, p), m.Question[0].String())
 	r, rtt, e := c.Exchange(m, net.JoinHostPort(targetServer.ip, p))
 	if e != nil {
 		trans.c = RECURSIVE_DNS_NETWORK_ERROR
@@ -1431,6 +1431,31 @@ func handleExtras(rrt *ResolverRuntime, cacheRet interface{}, extra *runtime.Ite
 	return nil, nil, false
 }
 
+func handleTLSProbe(rrt *ResolverRuntime, server *entity) {
+	m := new(dns.Msg)
+	m.SetQuestion(".", dns.TypeNULL)
+	c := new(dns.Client)
+	hostname := server.name
+	if dns.IsFqdn(server.name) {
+		hostname = strings.TrimRight(hostname, ".")
+	}
+	port := "853"
+	c.Net = NETWORK_TLS
+	c.TLSConfig = common.TLSConfigDNS()
+	c.TLSConfig.ServerName = hostname
+	c.Timeout = 3 * time.Second
+	_, _, err := c.Exchange(m, net.JoinHostPort(server.ip, port))
+	if err != nil {
+		LogInfo(rrt, "TLSPROBE: error for [%s]: [%s]", server.String(), err.Error())
+		rrt.c.Put(rrt.provider, runtime.MapKey(runtime.KV_TLS_CAPABILITY, server.ip), false)
+		return
+	}
+	// logger.debug("DISCOVERY SUCCESS :[%s]: [%s]", target+port, reply.String())
+	LogInfo(rrt, "TLSPROBE: success for [%s]", server.String())
+	rrt.c.Put(rrt.provider, runtime.MapKey(runtime.KV_TLS_CAPABILITY, server.ip), true)
+	return
+}
+
 /// setupClient takes care of setting up the transport for the query.
 /// Handles TLS capabilities retrieval/storage, udp/tcp preference (based on earlier rate limiting etc)
 func setupClient(rrt *ResolverRuntime, server *entity) (c *dns.Client, p string) {
@@ -1438,18 +1463,29 @@ func setupClient(rrt *ResolverRuntime, server *entity) (c *dns.Client, p string)
 	c = new(dns.Client)
 	/// retrieve cache network preference of the server. first we check whether it supports tls, if not then tcp,
 	/// if not, then default (_probably_ udp)
-	if tlsCap, ok := rrt.c.GetBool(rrt.provider, runtime.MapKey(runtime.KV_TLS_CAPABILITY, server.ip)); ok && tlsCap {
-		c.Net = "tcp-tls"
+	c.Net = rrt.prefNet
+	p = NetworkToPort[rrt.prefNet]
+
+	tlsCap, ok := rrt.c.GetBool(rrt.provider, runtime.MapKey(runtime.KV_TLS_CAPABILITY, server.ip))
+	if ok && tlsCap {
+		c.Net = NETWORK_TLS
 		p = "853"
 		c.TLSConfig = common.TLSConfigDNS()
-		c.TLSConfig.ServerName = server.name
-	} else if tcpPref, ok := rrt.c.GetBool(rrt.provider, runtime.MapKey(runtime.KV_TCP_PREFERENCE, server.ip)); ok && tcpPref {
-		c.Net = "tcp"
-		p = "53"
-	} else {
-		c.Net = rrt.prefNet
-		p = NetworkToPort[rrt.prefNet]
+		if dns.IsFqdn(server.name) {
+			c.TLSConfig.ServerName = strings.TrimRight(server.name, ".")
+		} else {
+			c.TLSConfig.ServerName = server.name
+		}
+	} else if !ok {
+		go handleTLSProbe(rrt, server)
 	}
+
+	tcpPref, ok := rrt.c.GetBool(rrt.provider, runtime.MapKey(runtime.KV_TCP_PREFERENCE, server.ip))
+	if ok && tcpPref {
+		c.Net = NETWORK_TCP
+		p = "53"
+	}
+
 	/// request random IP from the pool
 	if c.Net == "udp" {
 		c.Dialer = rrt.p.RandomizeUDPDialer()
