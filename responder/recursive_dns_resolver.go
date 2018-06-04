@@ -193,6 +193,13 @@ func doQuery(rrt *ResolverRuntime, targetServer *entity, qname string, qtype uin
 		trans.c = RECURSIVE_DNS_NETWORK_ERROR
 		appendTransaction(rrt, trans)
 		e = fmt.Errorf("transport error during DNS exchange [%s]", e.Error())
+		if r != nil && r.Truncated == true {
+			oldPrefNet := rrt.prefNet
+			rrt.prefNet = NETWORK_TCP
+			r, e = doQuery(rrt, targetServer, qname, qtype)
+			rrt.prefNet = oldPrefNet
+			return r, e
+		}
 		return
 	}
 	// LogInfo(rrt, "DNS query yields: [%v][%s]\n[%s]", rtt, targetServer, r.String())
