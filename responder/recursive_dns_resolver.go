@@ -406,35 +406,39 @@ func Resolve(rrt *ResolverRuntime) (outgoing *dns.Msg, e error) {
 				rrt.currentZone = z
 				LogInfo(rrt, "We have matching A records. Query loop diminished. Resuming from [%s] down to [%s]", rrt.zones[entryPoint], rrt.domain)
 				break
-			} else {
-				/// here we can evaluate if we are better off doing a separate resolve of the cached ns, or step further up
-				/// and to put that into practice, we compare the NS record(s) to the current zone (z) token bits
-				/// if we have match greater or equal than the TLD+1 part, we step back, otherwise, we do a parallel resolve for all the NS records
-				LogInfo(rrt, "No matching A records found for any NS records. Evaluating a separate resolve feasability.")
-				/// easiest way is to calculate number of dots in the common suffix of the two expressions
-				for _, ns := range targetNS {
-					numDots := 0
-					for i := 0; i < int(math.Min(float64(len(z)), float64(len(ns.Ns)))); i++ {
-						if z[len(z)-1-i] != ns.Ns[len(ns.Ns)-1-i] {
-							break
-						}
-						if z[len(z)-1-i] == "."[0] {
-							numDots++
-						}
-					}
-					/// TLD+1 match would mean at least 4 dots match, or if target domain is shorter, then numDots should equal the number of theoretical zones in the domain
-					if numDots > 3 || numDots == len(rrt.zones) {
-						// we let the next iteration of the loop to...
-						continue
-					}
-				}
-				LogInfo(rrt, "We havent found a NS in the same zone hierarchy as the target [%s] -- [%v]", z, targetNS)
-				LogInfo(rrt, "Executing a parallel resolve for NS records")
-				entryPoint = len(rrt.zones) - 1 - i
-				rrt.targetServers[z] = resolveParallelHarness(rrt, targetNS)
-				rrt.currentZone = z
-				break
 			}
+			/*
+				else {
+					/// here we can evaluate if we are better off doing a separate resolve of the cached ns, or step further up
+					/// and to put that into practice, we compare the NS record(s) to the current zone (z) token bits
+					/// if we have match greater or equal than the TLD+1 part, we step back, otherwise, we do a parallel resolve for all the NS records
+					LogInfo(rrt, "No matching A records found for any NS records. Evaluating a separate resolve feasability.")
+					/// easiest way is to calculate number of dots in the common suffix of the two expressions
+					for _, ns := range targetNS {
+						numDots := 0
+						for i := 0; i < int(math.Min(float64(len(z)), float64(len(ns.Ns)))); i++ {
+							if z[len(z)-1-i] != ns.Ns[len(ns.Ns)-1-i] {
+								break
+							}
+							if z[len(z)-1-i] == "."[0] {
+								numDots++
+							}
+						}
+						/// TLD+1 match would mean at least 4 dots match, or if target domain is shorter, then numDots should equal the number of theoretical zones in the domain
+						if numDots > 3 || numDots == len(rrt.zones) {
+							// we let the next iteration of the loop to...
+							continue
+						}
+					}
+					LogInfo(rrt, "We havent found a NS in the same zone hierarchy as the target [%s] -- [%v]", z, targetNS)
+					LogInfo(rrt, "Executing a parallel resolve for NS records")
+					entryPoint = len(rrt.zones) - 1 - i
+					rrt.targetServers[z] = resolveParallelHarness(rrt, targetNS)
+					rrt.currentZone = z
+					break
+
+				}
+			*/
 		}
 	}
 
