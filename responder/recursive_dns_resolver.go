@@ -1072,14 +1072,20 @@ func fetchRRByType(from *dns.Msg, tp uint16) (ret []dns.RR) {
 
 func validateNSEC(rrt *ResolverRuntime, in *dns.Msg, currentZone, currentToken string, responseType int) bool {
 	LogInfo(rrt, "Entering validateNSEC()")
-	nsecs := fetchRRByType(in, dns.TypeNSEC)
-	if nsecs == nil {
+	nsecs := []dns.RR{} //fetchRRByType(in.Answer, dns.TypeNSEC)
+	for _, rr := range in.Answer {
+		if rr.Header().Rrtype == dns.TypeNSEC {
+			nsecs = append(nsecs, rr)
+		}
+	}
+	if len(nsecs) == 0 {
 		return true
 	}
 	expectWildcardDeny := true
 	if dns.CountLabel(currentToken) > dns.CountLabel(currentZone)+1 {
 		expectWildcardDeny = false
 	}
+
 	var wildcardDeny, encloseDeny, dataDeny *dns.NSEC
 	rrNavigator(nsecs, func(rr dns.RR) int {
 		if rr.Header().Rrtype == dns.TypeNSEC {
