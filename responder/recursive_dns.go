@@ -1861,10 +1861,14 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 			removeDNSSECRecords(result)
 
 		}
-		result.SetEdns0(RECURSIVE_DNS_UDP_SIZE, doWeReturnDNSSEC(rrt))
+		result.Authoritative = false
+		if result.IsEdns0() == nil {
+			result.SetEdns0(RECURSIVE_DNS_UDP_SIZE, doWeReturnDNSSEC(rrt))
+		}
 		result.RecursionAvailable = true
 		result.AuthenticatedData = doWeTouchADFlag(rrt)
 		result.Compress = true
+		fmt.Printf("WRITING THIS MESSAGE OUT\n[%s]\n", result.String())
 		w.WriteMsg(result)
 		return
 

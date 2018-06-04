@@ -633,7 +633,7 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 		var redirectResult *dns.Msg
 		var err error
 
-		if res.Authoritative && strings.HasSuffix(lastOwner, res.Question[0].Name) {
+		if answerType == RESPONSE_REDIRECT && res.Authoritative && strings.HasSuffix(lastOwner, res.Question[0].Name) {
 			/// an extra hack for `list.tmall.com` (CNAME resolve loop)
 			LogInfo(rrt, "Doing the CNAME redirection loop prevention")
 			rrtCNAME := NewResolverRuntime(&runtime.Runtime{Cache: rrt.c, IPPool: rrt.p, SlackWH: rrt.f, Stats: rrt.s}, rrt.l, rrt.provider, newDNSQuery(lastOwner, rrt.record), rrt.oomAlert, rrt.oomAlert2, rrt.fileLogger)
