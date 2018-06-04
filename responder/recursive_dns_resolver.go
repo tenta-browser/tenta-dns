@@ -690,7 +690,7 @@ func removeDNSSECRecords(in *dns.Msg) {
 			}
 			return RR_NAVIGATOR_NEXT
 		})
-		*holder = temp
+		holder = &temp
 	}
 }
 
