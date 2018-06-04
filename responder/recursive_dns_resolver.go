@@ -55,6 +55,12 @@ const (
 )
 
 const (
+	NETWORK_UDP = "udp"
+	NETWORK_TCP = "tcp"
+	NETWORK_TLS = "tcp-tls"
+)
+
+const (
 	RR_NAVIGATOR_NEXT = iota
 	RR_NAVIGATOR_BREAK
 	RR_NAVIGATOR_BREAK_AND_PROPAGATE
@@ -313,7 +319,7 @@ func NewResolverRuntime(rt *runtime.Runtime, lg *logrus.Entry, provider string, 
 	LogInfo(rrt, "Domain tokenized as [%v]", rrt.zones)
 	rrt.targetServers = newTargetServerMap(rrt)
 	/// TODO: figure out a better way to handle preferred network setup
-	rrt.prefNet = "udp"
+	rrt.prefNet = NETWORK_UDP
 	rrt.record = rrt.original.Question[0].Qtype
 	rrt.transactions = []*transaction{}
 	rrt.blockTracker = make(map[string]int)
@@ -434,7 +440,6 @@ func Resolve(rrt *ResolverRuntime) (outgoing *dns.Msg, e error) {
 
 	/// do the actual recursion
 	outgoing, e = doQueryRecursively(rrt, entryPoint)
-	LogInfo(rrt, "We have a RESOLVE result\n[%p]%v\n", outgoing, outgoing)
 	return
 }
 
@@ -541,7 +546,6 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 	case RESPONSE_ANSWER, RESPONSE_ANSWER_REDIRECT:
 		LogInfo(rrt, "Got an answer. Returning it.")
 		tmp := setupResult(rrt, dns.RcodeSuccess, res)
-		LogInfo(rrt, "The answer in question is [%p][%v]\n", tmp, tmp)
 		return tmp, nil
 	case RESPONSE_DELEGATION:
 		LogInfo(rrt, "Got a naked delegation.")
@@ -652,9 +656,13 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 			return setupResult(rrt, dns.RcodeSuccess, redirectResult), nil
 		}
 	case RESPONSE_THROTTLE_SUSPECT:
-		if rrt.blockTracker[currentToken] < RECURSIVE_DNS_NUM_BLOCKED_BEFORE_FAILURE {
+		if rrt.blockTracker[currentToken] < RECURSIVE_DNS_NUM_BLOCKED_BEFORE_FAILURE-1 {
 			time.Sleep(time.Millisecond * RECURSIVE_DNS_WAIT_ON_RATELIMIT)
-			doQueryRecursively(rrt, _level)
+			return doQueryRecursively(rrt, _level)
+		} else if rrt.blockTracker[currentToken] < RECURSIVE_DNS_NUM_BLOCKED_BEFORE_FAILURE-1 {
+			time.Sleep(time.Millisecond * RECURSIVE_DNS_WAIT_ON_RATELIMIT)
+			rrt.prefNet = NETWORK_TCP
+			return doQueryRecursively(rrt, _level)
 		} else {
 			return setupResult(rrt, dns.RcodeServerFailure, nil), nil
 		}
