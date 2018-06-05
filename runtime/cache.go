@@ -24,6 +24,7 @@ package runtime
 
 import (
 	"math"
+	"strings"
 	"sync"
 	"time"
 
@@ -292,7 +293,7 @@ func neutralizeRecord(rr dns.RR) string {
 
 	switch rec := t.(type) {
 	case *dns.SOA:
-		rec.Expire, rec.Minttl, rec.Refresh, rec.Retry = 0, 0, 0, 0
+		rec.Expire, rec.Minttl, rec.Refresh, rec.Retry, rec.Serial = 0, 0, 0, 0, 0
 	}
 	return t.String()
 }
@@ -305,7 +306,8 @@ func (d *DNSCache) insertResponse(domain string, resp *dns.Msg) {
 	d.insertInternal(domain, responseCacheFromMsg(resp))
 }
 
-func (d *DNSCache) insertInternal(domain string, cachee opaqueCacheItem) {
+func (d *DNSCache) insertInternal(_domain string, cachee opaqueCacheItem) {
+	domain := strings.ToLower(_domain)
 	// d.lg.Infof("Inserting for [%s]", domain)
 	d.m.Lock()
 	dom, ok := d.l[domain]
@@ -329,7 +331,7 @@ func (d *DNSCache) insertInternal(domain string, cachee opaqueCacheItem) {
 }
 
 func (d *DNSCache) retrieve(domain string, t uint16, dnssec bool) (ret interface{}, extra *ItemCacheExtra) {
-	d.lg.Infof("Retrieving for [%s/%s/%v]", domain, dns.TypeToString[t], dnssec)
+	// d.lg.Infof("Retrieving for [%s/%s/%v]", domain, dns.TypeToString[t], dnssec)
 	d.m.RLock()
 	dom, ok := d.l[domain]
 	if !ok {
