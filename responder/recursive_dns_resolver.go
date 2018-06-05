@@ -927,7 +927,7 @@ func validateDNSSEC(rrt *ResolverRuntime, in *dns.Msg, currentZone, currentToken
 			return false
 		}
 		LogInfo(rrt, "Trying to validate DNSKEYS [%v]", dks)
-		if !validateDNSKEY(rrt, currentZone, dks, rrs) {
+		if !validateDNSKEY(rrt, currentToken, dks, rrs) {
 			LogInfo(rrt, "Unable to validate DNSKEYS!")
 			return false
 		}
@@ -936,6 +936,10 @@ func validateDNSSEC(rrt *ResolverRuntime, in *dns.Msg, currentZone, currentToken
 		// rrNavigator(dks, func(rr dns.RR) int {
 		for _, dk := range dks {
 			LogInfo(rrt, "Inserting [%s]", dk.String())
+			if dk.Hdr.Ttl < 20 {
+				/// adding a small hack here to be able to reuse these keys in the upcoming rrsig validation
+				dk.Hdr.Ttl = 20
+			}
 			rrt.c.Insert(rrt.provider, dk.Header().Name, dk, EXTRA_EMPTY)
 		}
 		// return RR_NAVIGATOR_NEXT
@@ -962,10 +966,10 @@ func validateDNSSEC(rrt *ResolverRuntime, in *dns.Msg, currentZone, currentToken
 /// get (via cache or network) DS records from parent zone
 /// sequentially try to validate every DNSKEY with one of the retrieved DSes
 /// fail if a DNSKEY can't be validated
-func validateDNSKEY(rrt *ResolverRuntime, currentZone string, dks []*dns.DNSKEY, rss []*dns.RRSIG) bool {
-	LogInfo(rrt, "Entering validateDNSKEY() with [%s][%v]", currentZone, dks)
+func validateDNSKEY(rrt *ResolverRuntime, currentToken string, dks []*dns.DNSKEY, rss []*dns.RRSIG) bool {
+	LogInfo(rrt, "Entering validateDNSKEY() with [%s][%v]", currentToken, dks)
 	LogInfo(rrt, "Zones are [%v]", rrt.zones)
-	dss, err := fetchFromCacheOrNetwork(rrt, currentZone, dns.TypeDS)
+	dss, err := fetchFromCacheOrNetwork(rrt, currentToken, dns.TypeDS)
 	if err != nil {
 		/// if we cannot produce DS records matching our DNSKEY, fail without question
 		LogError(rrt, "Cannot produce DS record. Cause [%s]. Checking whether we tolerate islands of security.", err.Error())
