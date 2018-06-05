@@ -1772,7 +1772,7 @@ func getZoneAXFR(rt *runtime.Runtime, l *logrus.Entry, provider, zone string) er
 	t := new(dns.Transfer)
 	m := new(dns.Msg)
 	m.SetAxfr(zone)
-	r, e := t.In(m, rootServers[provider][0].ipv4+":53")
+	r, e := t.In(m, mappedRootServers[provider][0].ip+":53")
 	if e != nil {
 		return fmt.Errorf("cannot execute zone transfer [%s]", e.Error())
 	}
