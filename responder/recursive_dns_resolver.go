@@ -552,6 +552,14 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 		}
 	}
 
+	/// need to handle this case outside the main switch, because redirect response cases are spread across many branches
+	/// handle intermediary qname CNAMES as empty non-terminals
+	if (answerType == RESPONSE_REDIRECT || answerType == RESPONSE_REDIRECT_GLUE || answerType == RESPONSE_ANSWER_REDIRECT) && !isFinalQuestion {
+		LogInfo(rrt, "Got a CNAME on non-terminal qname. Retrying same servers for one more label.")
+		rrt.targetServers[currentToken] = rrt.targetServers[currentZone]
+		return doQueryRecursively(rrt, _level+1)
+	}
+
 	switch answerType {
 	case RESPONSE_ANSWER, RESPONSE_ANSWER_REDIRECT:
 		LogInfo(rrt, "Got an answer. Returning it.")

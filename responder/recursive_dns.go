@@ -1965,7 +1965,7 @@ func ServeDNS(cfg runtime.RecursorConfig, rt *runtime.Runtime, v4 bool, net stri
 	// transferRootZone(lg, provider)
 
 	getRootTrustAnchors(rt, lg, provider)
-	// getZoneAXFR(rt, lg, provider, ".")
+	go getZoneAXFR(rt, lg, provider, ".")
 
 	if net == "tls" {
 		go func() {
