@@ -1925,9 +1925,9 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 func ServeDNS(cfg runtime.RecursorConfig, rt *runtime.Runtime, v4 bool, net string, d *runtime.ServerDomain, opennicMode bool, dnssecMode bool) {
 	*dnssecEnabled = dnssecMode
 	*debugLevel = true
-	provider := "tenta"
+	provider := PROVIDER_TENTA
 	if opennicMode == true {
-		provider = "opennic"
+		provider = PROVIDER_OPENNIC
 	}
 	ip, port := hostInfo(v4, net, d)
 	addr := fmt.Sprintf("%s:%d", ip, port)
