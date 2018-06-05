@@ -63,6 +63,7 @@ type Config struct {
 	RateThreshold     uint64
 	OutboundIPs       []string
 	SlackFeedback     map[string]string
+	ThreadedResolver  bool
 }
 
 type NSnitchConfig struct {

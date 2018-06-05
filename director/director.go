@@ -97,6 +97,14 @@ func (dir *Director) doOrchestrate(systemd bool) {
 	players := make(map[string]*player)
 	interfaces := make([]common.Interface, 0)
 
+	if dir.h.MasterConfig.ThreadedResolver {
+		dir.lg.Infof("Setting resolver style as threaded")
+		responder.THREADING = responder.THREADING_NETWORK_ONLY
+	} else {
+		dir.lg.Infof("Setting resolver style as non-threaded")
+		responder.THREADING = responder.THREADING_NONE
+	}
+
 	for _, ncfg := range dir.h.NSnitchs {
 		base := filepath.Base(ncfg.ConfigFile)
 		for _, s := range domainLister(ncfg.Domains, true, true) {
