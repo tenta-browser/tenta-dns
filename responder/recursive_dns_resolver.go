@@ -4,10 +4,12 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io/ioutil"
+	"math/rand"
 	"net"
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -46,6 +48,7 @@ const (
 	RECURSIVE_DNS_NUM_RECURSIONS_BEFORE_FAILURE = 30
 	RECURSIVE_DNS_ALLOW_ISLANDS_OF_SECURITY     = true
 	RECURSIVE_DNS_FILE_LOGGING_LOCATION         = "" /// folder in which to dump resolver debug files, when LOGGING_FILE is active
+	RECURSIVE_DNS_MAX_GOROUTINES                = 20000
 )
 
 const (
@@ -99,6 +102,10 @@ var responseTypeToString = map[int]string{
 var (
 	RESPONSE_EMPTY = [][]dns.RR{nil, nil, nil}
 	EXTRA_EMPTY    = &runtime.ItemCacheExtra{false, false, false, nil}
+)
+
+var (
+	masterGoroutineNum uint32 = 0
 )
 
 // ResolverRuntime -- central piece of a resolve; holds all the necessary data, incoming query, ancillary modules etc
@@ -194,6 +201,7 @@ func doQuery(rrt *ResolverRuntime, targetServer *entity, qname string, qtype uin
 		appendTransaction(rrt, trans)
 		e = fmt.Errorf("transport error during DNS exchange [%s]", e.Error())
 		if r != nil && r.Truncated == true {
+			LogInfo(rrt, "Trying to recorver from TC")
 			oldPrefNet := rrt.prefNet
 			rrt.prefNet = NETWORK_TCP
 			r, e = doQuery(rrt, targetServer, qname, qtype)
@@ -274,17 +282,33 @@ func resolveParallelHarness(rrt *ResolverRuntime, target []*dns.NS) (result []*e
 /// parallelism lies in the ask all the NSes _at the same time_
 func doQueryParallelHarness(rrt *ResolverRuntime, targetServers []*entity, qname string, qtype uint16) (*dns.Msg, error) {
 	LogInfo(rrt, "Entering doQueryParallelHarness() with [%s][%s] -- [%v]", qname, dns.TypeToString[qtype], targetServers)
-	if len(targetServers) == 0 {
+	serversNum := len(targetServers)
+	routinesNum := serversNum + 1
+	if serversNum == 0 {
 		return nil, fmt.Errorf("there are no configured servers")
 	}
-	if targetServers[0].zone == "." || THREADING == THREADING_NONE {
-		return doQuery(rrt, targetServers[0], qname, qtype)
+
+	if targetServers[0].zone == "." || THREADING == THREADING_NONE || atomic.LoadUint32(&masterGoroutineNum) >= RECURSIVE_DNS_MAX_GOROUTINES {
+		tsIndex := rand.Intn(serversNum)
+		return doQuery(rrt, targetServers[tsIndex], qname, qtype)
 	}
+
+	wg := &sync.WaitGroup{}
+	wg.Add(serversNum)
+	go func() {
+		wg.Wait()
+		LogInfo(rrt, "All %d threads joined back.", routinesNum)
+		atomic.AddUint32(&masterGoroutineNum, -uint32(routinesNum))
+	}()
+	atomic.AddUint32(&masterGoroutineNum, uint32(routinesNum))
 
 	routinesDone := int32(0)
 	res := make(chan *parallelQueryResult, len(targetServers))
 	for _, srv := range targetServers {
 		go func(thisEntity *entity) {
+			defer func() {
+				wg.Done()
+			}()
 			r, e := doQuery(rrt, thisEntity, qname, qtype)
 			res <- &parallelQueryResult{r, e}
 			if atomic.AddInt32(&routinesDone, 1) == int32(len(targetServers)) {

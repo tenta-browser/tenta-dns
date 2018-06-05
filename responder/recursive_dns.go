@@ -1868,7 +1868,6 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 		result.RecursionAvailable = true
 		result.AuthenticatedData = doWeTouchADFlag(rrt)
 		result.Compress = true
-		fmt.Printf("WRITING THIS MESSAGE OUT\n[%s]\n", result.String())
 		w.WriteMsg(result)
 		return
 
