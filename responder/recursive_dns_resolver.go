@@ -202,8 +202,9 @@ func doQuery(rrt *ResolverRuntime, targetServer *entity, qname string, qtype uin
 	m := new(dns.Msg)
 	/// fetch EDNS allergy for server
 	ednsAllergy, ok := rrt.c.GetBool(rrt.provider, runtime.MapKey(runtime.KV_EDNS_ALLERGY, targetServer.ip))
+	m.SetQuestion(qname, qtype)
 	if !ok || (ok && !ednsAllergy) {
-		m.SetQuestion(qname, qtype).SetEdns0(RECURSIVE_DNS_UDP_SIZE, true)
+		m.SetEdns0(RECURSIVE_DNS_UDP_SIZE, true)
 	}
 	m.Compress = true
 	m.RecursionDesired = false
