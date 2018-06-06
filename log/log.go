@@ -27,6 +27,7 @@ import (
 	"io/ioutil"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/mattn/go-colorable"
 	"github.com/sirupsen/logrus"
@@ -44,7 +45,7 @@ func (l *EventualLogger) Queuef(format string, args ...interface{}) {
 		*l = make(EventualLogger, 0)
 	}
 	for _, line := range lines {
-		*l = append(*l, line+"\n")
+		*l = append(*l, fmt.Sprintf("[%s]%s\n", time.Now().Format("15:04:05.000"), line))
 	}
 }
 
