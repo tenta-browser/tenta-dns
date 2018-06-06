@@ -1852,9 +1852,13 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 
 		l = l.WithField("domain", r.Question[0].Name)
 		fLogger, _ := os.Create(RECURSIVE_DNS_FILE_LOGGING_LOCATION + r.Question[0].Name + "." + dns.TypeToString[r.Question[0].Qtype])
-		rrt := NewResolverRuntime(rt, l, provider, r, 0, 0, fLogger)
+		rrt := NewResolverRuntime(rt, l, provider, r, 0, 0, fLogger, new(nlog.EventualLogger))
 		result, e := Resolve(rrt)
 		if e != nil || result == nil {
+			if LOGGING == LOGGING_EVENTUALLY {
+				prefix := fmt.Sprintf("[%s/%s]", rrt.domain, dns.TypeToString[rrt.record])
+				rrt.eventualLogger.FlushExt(rrt.l, prefix)
+			}
 			result = setupResult(rrt, dns.RcodeServerFailure, nil)
 		}
 		if !doWeReturnDNSSEC(rrt) && isDNSSECResponse(result) {

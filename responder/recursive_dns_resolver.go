@@ -27,6 +27,7 @@ const (
 	LOGGING_LOGRUS
 	LOGGING_PRINTF
 	LOGGING_FILE
+	LOGGING_EVENTUALLY
 )
 
 const (
@@ -37,7 +38,7 @@ const (
 
 var (
 	THREADING = THREADING_NONE
-	LOGGING   = LOGGING_LOGRUS
+	LOGGING   = LOGGING_EVENTUALLY
 )
 
 const (
@@ -116,21 +117,21 @@ type ResolverRuntime struct {
 	s *runtime.Stats
 	l *logrus.Entry
 	/// session specific vars
-	provider      string               /// the type of service we provide (opennic/iana roots)
-	original      *dns.Msg             /// the original request that came in (aggregated form of all the query flags and parameters)
-	record        uint16               /// requested RR type (miek dns lib format)
-	domain        string               /// the original requested domain
-	zones         []string             /// tokens of the original domain
-	currentZone   string               /// the zone we are currently quering in (it's the parent zone of the current query subject (may be more than one label difference between the two))
-	prefNet       string               /// preferred network to use for upstream queries
-	transactions  []*transaction       /// a log of all the transactions until an answer is formulated
-	targetServers map[string][]*entity /// a zone string to available nameservers map (the first level, "." is filled automatically)
-	redirections  []*dns.CNAME         /// a collection of all the redirections (that ultimately will make it into the answer section) until an answer can be formulated
-	blockTracker  map[string]int       /// a map to track blocked requests
-	oomAlert      int32                /// contrary to what the name says, it's a counter for the number of recursions made (global, per request handler)
-	oomAlert2     int32                /// same as above, it detects loops in another aspect
-	fileLogger    *os.File             /// logger activated when LOGGING is LOGGING_FILE
-
+	provider       string               /// the type of service we provide (opennic/iana roots)
+	original       *dns.Msg             /// the original request that came in (aggregated form of all the query flags and parameters)
+	record         uint16               /// requested RR type (miek dns lib format)
+	domain         string               /// the original requested domain
+	zones          []string             /// tokens of the original domain
+	currentZone    string               /// the zone we are currently quering in (it's the parent zone of the current query subject (may be more than one label difference between the two))
+	prefNet        string               /// preferred network to use for upstream queries
+	transactions   []*transaction       /// a log of all the transactions until an answer is formulated
+	targetServers  map[string][]*entity /// a zone string to available nameservers map (the first level, "." is filled automatically)
+	redirections   []*dns.CNAME         /// a collection of all the redirections (that ultimately will make it into the answer section) until an answer can be formulated
+	blockTracker   map[string]int       /// a map to track blocked requests
+	oomAlert       int32                /// contrary to what the name says, it's a counter for the number of recursions made (global, per request handler)
+	oomAlert2      int32                /// same as above, it detects loops in another aspect
+	fileLogger     *os.File             /// logger activated when LOGGING is LOGGING_FILE
+	eventualLogger *log.EventualLogger  /// logger which collects lines that are output eventually if an ulterior condition is met (e.g. resolve failure)
 }
 
 /// this structure is about an entity, it's primary element is one IP
@@ -229,7 +230,7 @@ func resolveParallelHarness(rrt *ResolverRuntime, target []*dns.NS) (result []*e
 		input = append(input, newDNSQuery(ns.Ns, dns.TypeA))
 	}
 	if THREADING != THREADING_MAX {
-		answer, _ := Resolve(NewResolverRuntime(&runtime.Runtime{Cache: rrt.c, IPPool: rrt.p, SlackWH: rrt.f, Stats: rrt.s}, rrt.l, rrt.provider, input[0], rrt.oomAlert, rrt.oomAlert2, rrt.fileLogger))
+		answer, _ := Resolve(NewResolverRuntime(&runtime.Runtime{Cache: rrt.c, IPPool: rrt.p, SlackWH: rrt.f, Stats: rrt.s}, rrt.l, rrt.provider, input[0], rrt.oomAlert, rrt.oomAlert2, rrt.fileLogger, rrt.eventualLogger))
 		if answer != nil {
 			answer.Question = input[0].Question
 			if answer.Answer != nil {
@@ -248,7 +249,7 @@ func resolveParallelHarness(rrt *ResolverRuntime, target []*dns.NS) (result []*e
 	achan := make(chan *dns.Msg, len(input))
 	for _, q := range input {
 		go func(question *dns.Msg) {
-			answer, _ := Resolve(NewResolverRuntime(&runtime.Runtime{Cache: rrt.c, IPPool: rrt.p, SlackWH: rrt.f, Stats: rrt.s}, rrt.l, rrt.provider, question, rrt.oomAlert, rrt.oomAlert2, rrt.fileLogger))
+			answer, _ := Resolve(NewResolverRuntime(&runtime.Runtime{Cache: rrt.c, IPPool: rrt.p, SlackWH: rrt.f, Stats: rrt.s}, rrt.l, rrt.provider, question, rrt.oomAlert, rrt.oomAlert2, rrt.fileLogger, rrt.eventualLogger))
 			if answer != nil {
 				answer.Question = question.Question
 				achan <- answer
@@ -337,7 +338,7 @@ func doQueryParallelHarness(rrt *ResolverRuntime, targetServers []*entity, qname
 
 }
 
-func NewResolverRuntime(rt *runtime.Runtime, lg *logrus.Entry, provider string, incoming *dns.Msg, recursionStats, recursionStats2 int32, fileLogger *os.File) (rrt *ResolverRuntime) {
+func NewResolverRuntime(rt *runtime.Runtime, lg *logrus.Entry, provider string, incoming *dns.Msg, recursionStats, recursionStats2 int32, fileLogger *os.File, eventualLogger *log.EventualLogger) (rrt *ResolverRuntime) {
 	/// normalize incoming query arguments
 	incoming.Question[0].Name = strings.ToLower(incoming.Question[0].Name)
 
@@ -356,6 +357,7 @@ func NewResolverRuntime(rt *runtime.Runtime, lg *logrus.Entry, provider string, 
 	rrt.record = rrt.original.Question[0].Qtype
 	rrt.transactions = []*transaction{}
 	rrt.blockTracker = make(map[string]int)
+	rrt.eventualLogger = eventualLogger
 	return
 }
 
@@ -557,10 +559,10 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 			/// we do a child zone DNSKEY - this can be verified, even if the RRSIG is signed with the queried key, because ve validate DNSKEY first, and then RRSIG
 			if answerType == RESPONSE_DELEGATION_AUTHORITATIVE && fetchRRByType(res, dns.TypeDS) == nil {
 				LogInfo(rrt, "Caught an authoritative delegation for [%s]", res.Question[0].String())
-				rrtDS := NewResolverRuntime(&runtime.Runtime{Cache: rrt.c, IPPool: rrt.p, SlackWH: rrt.f, Stats: rrt.s}, rrt.l, rrt.provider, newDNSQuery(currentToken, dns.TypeDS), rrt.oomAlert, rrt.oomAlert2, rrt.fileLogger)
+				rrtDS := NewResolverRuntime(&runtime.Runtime{Cache: rrt.c, IPPool: rrt.p, SlackWH: rrt.f, Stats: rrt.s}, rrt.l, rrt.provider, newDNSQuery(currentToken, dns.TypeDS), rrt.oomAlert, rrt.oomAlert2, rrt.fileLogger, rrt.eventualLogger)
 				setupZone(rrtDS, currentToken, extractCommonElements(fetchRRByType(res, dns.TypeNS), rrt.targetServers[currentZone]))
 				Resolve(rrtDS)
-				rrtDNSKEY := NewResolverRuntime(&runtime.Runtime{Cache: rrt.c, IPPool: rrt.p, SlackWH: rrt.f, Stats: rrt.s}, rrt.l, rrt.provider, newDNSQuery(currentToken, dns.TypeDNSKEY), rrt.oomAlert, rrt.oomAlert2, rrt.fileLogger)
+				rrtDNSKEY := NewResolverRuntime(&runtime.Runtime{Cache: rrt.c, IPPool: rrt.p, SlackWH: rrt.f, Stats: rrt.s}, rrt.l, rrt.provider, newDNSQuery(currentToken, dns.TypeDNSKEY), rrt.oomAlert, rrt.oomAlert2, rrt.fileLogger, rrt.eventualLogger)
 				setupZone(rrtDNSKEY, currentToken, extractCommonElements(fetchRRByType(res, dns.TypeNS), rrt.targetServers[currentZone]))
 				Resolve(rrtDNSKEY)
 			}
@@ -685,12 +687,12 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 		if answerType == RESPONSE_REDIRECT && res.Authoritative && strings.HasSuffix(lastOwner, res.Question[0].Name) {
 			/// an extra hack for `list.tmall.com` (CNAME resolve loop)
 			LogInfo(rrt, "Doing the CNAME redirection loop prevention")
-			rrtCNAME := NewResolverRuntime(&runtime.Runtime{Cache: rrt.c, IPPool: rrt.p, SlackWH: rrt.f, Stats: rrt.s}, rrt.l, rrt.provider, newDNSQuery(lastOwner, rrt.record), rrt.oomAlert, rrt.oomAlert2, rrt.fileLogger)
+			rrtCNAME := NewResolverRuntime(&runtime.Runtime{Cache: rrt.c, IPPool: rrt.p, SlackWH: rrt.f, Stats: rrt.s}, rrt.l, rrt.provider, newDNSQuery(lastOwner, rrt.record), rrt.oomAlert, rrt.oomAlert2, rrt.fileLogger, rrt.eventualLogger)
 			setupZone(rrtCNAME, lastOwner, rrt.targetServers[currentZone])
 			redirectResult, err = Resolve(rrtCNAME)
 		} else {
 			redirectResult, err = Resolve(NewResolverRuntime(&runtime.Runtime{Cache: rrt.c, IPPool: rrt.p, SlackWH: rrt.f, Stats: rrt.s},
-				rrt.l, rrt.provider, newDNSQuery(lastOwner, rrt.record), rrt.oomAlert, rrt.oomAlert2, rrt.fileLogger))
+				rrt.l, rrt.provider, newDNSQuery(lastOwner, rrt.record), rrt.oomAlert, rrt.oomAlert2, rrt.fileLogger, rrt.eventualLogger))
 		}
 
 		if err != nil {
@@ -1593,7 +1595,7 @@ func fetchFromCacheOrNetwork(rrt *ResolverRuntime, zone string, record uint16) (
 	}
 
 	/// reaching this point means we cannot serve the answer from cache
-	networkDS, err := Resolve(NewResolverRuntime(&runtime.Runtime{Cache: rrt.c, IPPool: rrt.p, SlackWH: rrt.f, Stats: rrt.s}, rrt.l, rrt.provider, newDNSQuery(zone, record), rrt.oomAlert, rrt.oomAlert2, rrt.fileLogger))
+	networkDS, err := Resolve(NewResolverRuntime(&runtime.Runtime{Cache: rrt.c, IPPool: rrt.p, SlackWH: rrt.f, Stats: rrt.s}, rrt.l, rrt.provider, newDNSQuery(zone, record), rrt.oomAlert, rrt.oomAlert2, rrt.fileLogger, rrt.eventualLogger))
 	if err != nil {
 		return nil, err
 	} else if networkDS == nil {
@@ -1630,7 +1632,7 @@ func fetchNSAsEntity(rrt *ResolverRuntime, zone string, resolveNS, resolveA bool
 			return nil
 		}
 		LogInfo(rrt, "fetchNSAsEntity: Retrieving NS records the hard way.")
-		resolvedNS, _ := Resolve(NewResolverRuntime(&runtime.Runtime{Cache: rrt.c, IPPool: rrt.p, SlackWH: rrt.f, Stats: rrt.s}, rrt.l, rrt.provider, newDNSQuery(zone, dns.TypeNS), rrt.oomAlert, rrt.oomAlert2, rrt.fileLogger))
+		resolvedNS, _ := Resolve(NewResolverRuntime(&runtime.Runtime{Cache: rrt.c, IPPool: rrt.p, SlackWH: rrt.f, Stats: rrt.s}, rrt.l, rrt.provider, newDNSQuery(zone, dns.TypeNS), rrt.oomAlert, rrt.oomAlert2, rrt.fileLogger, rrt.eventualLogger))
 		/// check if we have glue records (if indeed we have, construct the entities array, and return it, else, pass the Ns array further down to processing)
 		for _, answer := range resolvedNS.Answer {
 			if ns, ok := answer.(*dns.NS); ok {
@@ -1833,6 +1835,8 @@ func LogInfo(rrt *ResolverRuntime, format string, args ...interface{}) {
 		return
 	} else if LOGGING == LOGGING_LOGRUS {
 		rrt.l.Infof(format, args...)
+	} else if LOGGING == LOGGING_EVENTUALLY {
+		rrt.eventualLogger.Queuef(format, args...)
 	} else {
 		rrt.fileLogger.WriteString(fmt.Sprintf(format+"\n", args...))
 	}
@@ -1846,6 +1850,8 @@ func LogError(rrt *ResolverRuntime, format string, args ...interface{}) {
 		return
 	} else if LOGGING == LOGGING_LOGRUS {
 		rrt.l.Errorf(format, args...)
+	} else if LOGGING == LOGGING_EVENTUALLY {
+		rrt.eventualLogger.Queuef(format, args...)
 	} else {
 		rrt.fileLogger.WriteString(fmt.Sprintf(format+"\n", args...))
 	}
