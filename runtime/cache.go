@@ -339,7 +339,6 @@ func (d *DNSCache) retrieve(domain string, t uint16, dnssec bool) (ret interface
 		return
 	}
 	dom.m.RLock()
-	defer dom.m.RUnlock()
 	d.m.RUnlock()
 	retRegular := []dns.RR{}
 	interm := dom.l[t]
@@ -355,13 +354,18 @@ func (d *DNSCache) retrieve(domain string, t uint16, dnssec bool) (ret interface
 		/// if item is queried before rounded eviction time
 		if v.timeCreated().Add(v.validity()).Before(time.Now()) {
 			// d.lg.Debugf("Deleting record, because [%v] + [%v] > [%v]", v.timeCreated(), v.validity(), time.Now())
-			delete(interm, k)
+			defer func () {
+				dom.m.Lock()
+				delete(interm, k)
+				dom.m.Unlock()
+			}
 			continue
 		} else { /// if opaque cache item has valid TTL
 			// d.lg.Debugf("Item is within validity period. Returning as requested, or as possible.")
 			if dnssec && v.isDNSSECStore() { /// if we need dnssec and we have a dnssec response, we return *the* response (only one of those per RRtype)
 				// d.lg.Debugf("Returning DNSSEC cache -- [%v]", v.(*responseCache).Msg.Question[0])
 				v.adjustValidity(int64(-time.Now().Sub(v.timeCreated()) / time.Second))
+				dom.m.RUnlock()
 				return v.(*responseCache).Msg, nil
 			} else if !v.isDNSSECStore() {
 				// d.lg.Debugf("Returning regular cache item -- [%v]", v.(*itemCache).RR)
@@ -374,10 +378,12 @@ func (d *DNSCache) retrieve(domain string, t uint16, dnssec bool) (ret interface
 		}
 	}
 	if !dnssec || (dnssec && len(retRegular) > 0) {
+		dom.m.RUnlock()
 		return retRegular, extra
 	}
 	/// return a nil struct pointer so the interface (ptr) itself wouldn't be nil
 	var retDummyDnssec *dns.Msg
+	dom.m.RUnlock()
 	return retDummyDnssec, nil
 }
 
