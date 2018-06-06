@@ -549,6 +549,7 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 		}
 	}
 	/// at this point we know that we can't skip an rtt to the NSes
+	networkRTTStart := time.Now()
 	res, err := doQueryParallelHarness(rrt, rrt.targetServers[currentZone], currentToken, qtype)
 	answerType := RESPONSE_UNKNOWN
 	/// propagate back (this means, that all NSes returned an error)
@@ -563,7 +564,7 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 	} else {
 		cosmetizeRecords(res)
 
-		LogInfo(rrt, "DNS query:\n[%s]", res.String())
+		LogInfo(rrt, "DNS query:\n[%v][%s]", time.Now().Sub(networkRTTStart), res.String())
 		/// no fatal error means we can proceed to DNSSEC validation
 		answerType = evaluateResponse(rrt, currentToken, qtype, isFinalQuestion, res)
 		LogInfo(rrt, "We cannot be certain, but the answer looks like an [%s]", responseTypeToString[answerType])
@@ -590,7 +591,8 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 		/// TODO: add record security check
 		cacheResponse(rrt, res, answerType)
 
-		if !isFinalQuestion && answerType != RESPONSE_NODATA && answerType != RESPONSE_NXDOMAIN {
+		if answerType != RESPONSE_NODATA && answerType != RESPONSE_NXDOMAIN &&
+			answerType != RESPONSE_EDNS_ALLERGY && answerType != RESPONSE_THROTTLE_SUSPECT {
 			rrt.currentZone = currentToken
 		}
 	}
@@ -723,7 +725,11 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 	case RESPONSE_EDNS_ALLERGY:
 		if rrt.eDNSAffinity == EDNS_ALLOWED {
 			rrt.eDNSAffinity = EDNS_SKIP
-			r, e := doQueryRecursively(rrt, _level)
+			plusOne := 0
+			if isFinalQuestion {
+				plusOne++
+			}
+			r, e := doQueryRecursively(rrt, _level+plusOne)
 			rrt.eDNSAffinity = EDNS_ALLOWED
 			/// caching servers' EDNS allergy
 			for _, srv := range rrt.targetServers[currentZone] {
