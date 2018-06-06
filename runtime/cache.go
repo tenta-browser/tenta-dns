@@ -137,6 +137,7 @@ func (i *itemCache) validity() time.Duration {
 
 func (i *itemCache) adjustValidity(delta int64) {
 	i.Header().Ttl = uint32(int64(i.Header().Ttl) + delta)
+	i.Duration = time.Duration(i.Header().Ttl) * time.Second
 }
 
 func (r *responseCache) isDNSSECStore() bool {
@@ -161,12 +162,16 @@ func (r *responseCache) validity() time.Duration {
 
 func (r *responseCache) adjustValidity(delta int64) {
 	rrHolder := [][]dns.RR{r.Answer, r.Ns, r.Extra}
-
+	minTTL := uint32(72 * time.Hour / time.Second)
 	for _, h := range rrHolder {
 		for _, rr := range h {
 			rr.Header().Ttl = uint32(int64(rr.Header().Ttl) + delta)
+			if rr.Header().Ttl < minTTL {
+				minTTL = rr.Header().Ttl
+			}
 		}
 	}
+	r.Duration = time.Duration(minTTL) * time.Second
 }
 
 /*
@@ -248,6 +253,10 @@ func (d *DNSCacheHolder) GetBool(provider, key string) (bool, bool) {
  */
 
 func (d *DNSCacheHolder) Insert(provider, domain string, rr dns.RR, extra *ItemCacheExtra) {
+	/// drop entries with 0 TTL
+	if rr.Header().Ttl == 0 {
+		return
+	}
 	/// concurrent read from a generic map
 	if c, ok := d.m[provider]; ok {
 		c.insert(domain, rr, extra)
@@ -255,6 +264,15 @@ func (d *DNSCacheHolder) Insert(provider, domain string, rr dns.RR, extra *ItemC
 }
 
 func (d *DNSCacheHolder) InsertResponse(provider, domain string, r *dns.Msg) {
+	/// it's oversimplified, but needs to be in order to be in sync with the rest of the cache
+	/// TODO: complicate this part a bit
+	for _, h := range [][]dns.RR{r.Answer, r.Ns, r.Extra} {
+		for _, rr := range h {
+			if rr.Header().Ttl == 0 {
+				return
+			}
+		}
+	}
 	if c, ok := d.m[provider]; ok {
 		c.insertResponse(domain, r)
 	}
