@@ -1808,7 +1808,7 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 
 	l := loggy
 	return func(w dns.ResponseWriter, r *dns.Msg) {
-		// startTime := time.Now()
+		startTime := time.Now()
 		rt.Stats.Count(StatsQueryTotal)
 		if network == "udp" {
 			rt.Stats.Count(StatsQueryUDP)
@@ -1854,16 +1854,21 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 		fLogger, _ := os.Create(RECURSIVE_DNS_FILE_LOGGING_LOCATION + r.Question[0].Name + "." + dns.TypeToString[r.Question[0].Qtype])
 		rrt := NewResolverRuntime(rt, l, provider, r, 0, 0, fLogger, &nlog.EventualLogger{})
 		result, e := Resolve(rrt)
+		prePrefix := ""
+		/// debug slow queries
+		if startTime.Add(RECURSIVE_DNS_SLOW_QUERY_THRESHOLD * time.Millisecond).Before(time.Now()) {
+			prePrefix = "SLOWQUERY:"
+		}
 		if e != nil || result == nil {
 			if LOGGING == LOGGING_EVENTUALLY {
-				prefix := fmt.Sprintf("[%s/%s]", rrt.domain, dns.TypeToString[rrt.record])
+				prefix := fmt.Sprintf("[%s%s/%s]", prePrefix, rrt.domain, dns.TypeToString[rrt.record])
 				rrt.eventualLogger.FlushExt(rrt.l, prefix)
 			}
 			result = setupResult(rrt, dns.RcodeServerFailure, nil)
 		}
 
 		if len(result.Answer) == 0 && LOGGING == LOGGING_EVENTUALLY {
-			prefix := fmt.Sprintf("[%s/%s]", rrt.domain, dns.TypeToString[rrt.record])
+			prefix := fmt.Sprintf("[%s%s/%s]", prePrefix, rrt.domain, dns.TypeToString[rrt.record])
 			rrt.eventualLogger.FlushExt(rrt.l, prefix)
 		}
 

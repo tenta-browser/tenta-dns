@@ -50,6 +50,7 @@ const (
 	RECURSIVE_DNS_ALLOW_ISLANDS_OF_SECURITY     = true
 	RECURSIVE_DNS_FILE_LOGGING_LOCATION         = "" /// folder in which to dump resolver debug files, when LOGGING_FILE is active
 	RECURSIVE_DNS_MAX_GOROUTINES                = 20000
+	RECURSIVE_DNS_SLOW_QUERY_THRESHOLD          = 1000 /// expressed in milliseconds
 )
 
 const (
