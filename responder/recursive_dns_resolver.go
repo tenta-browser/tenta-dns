@@ -37,7 +37,7 @@ const (
 
 var (
 	THREADING = THREADING_NONE
-	LOGGING   = LOGGING_PRINTF
+	LOGGING   = LOGGING_LOGRUS
 )
 
 const (
@@ -338,6 +338,9 @@ func doQueryParallelHarness(rrt *ResolverRuntime, targetServers []*entity, qname
 }
 
 func NewResolverRuntime(rt *runtime.Runtime, lg *logrus.Entry, provider string, incoming *dns.Msg, recursionStats, recursionStats2 int32, fileLogger *os.File) (rrt *ResolverRuntime) {
+	/// normalize incoming query arguments
+	incoming.Question[0].Name = strings.ToLower(incoming.Question[0].Name)
+
 	rrt = &ResolverRuntime{
 		c: rt.Cache, p: rt.IPPool, f: rt.SlackWH, s: rt.Stats, l: lg, original: incoming, provider: provider,
 		oomAlert: recursionStats, oomAlert2: recursionStats2, fileLogger: fileLogger,
