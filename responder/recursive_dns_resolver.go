@@ -718,7 +718,8 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 			return setupResult(rrt, dns.RcodeServerFailure, nil), nil
 		}
 	case RESPONSE_UNKNOWN:
-		rrt.l.Fatalf("Cannot determine the type of answer [%s]", res.String())
+		LogError(rrt, "Cannot determine the type of answer [%s]", res.String())
+		rrt.f.SendMessage(fmt.Sprintf("Cannot determine type of answer while resolving [%s/%s]", rrt.domain, dns.TypeToString[rrt.record]), rrt.provider)
 		return nil, fmt.Errorf("unknown response type")
 	}
 
