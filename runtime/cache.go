@@ -41,6 +41,7 @@ const (
 const (
 	KV_TLS_CAPABILITY = "tlscap"
 	KV_TCP_PREFERENCE = "tcppref"
+	KV_EDNS_ALLERGY   = "skipedns"
 )
 
 const (

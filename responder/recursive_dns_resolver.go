@@ -42,6 +42,12 @@ var (
 )
 
 const (
+	/// by default allowed, and encouraged
+	EDNS_ALLOWED = iota
+	EDNS_SKIP
+)
+
+const (
 	RECURSIVE_DNS_UDP_SIZE                      = 4096
 	RECURSIVE_DNS_NETWORK_ERROR                 = -1
 	RECURSIVE_DNS_WAIT_ON_RATELIMIT             = 1000 /// millisec
@@ -84,6 +90,7 @@ const (
 	RESPONSE_REDIRECT
 	RESPONSE_REDIRECT_GLUE
 	RESPONSE_THROTTLE_SUSPECT
+	RESPONSE_EDNS_ALLERGY
 )
 
 var responseTypeToString = map[int]string{
@@ -99,6 +106,7 @@ var responseTypeToString = map[int]string{
 	RESPONSE_REDIRECT:                 "redirect",
 	RESPONSE_REDIRECT_GLUE:            "redirect/glue",
 	RESPONSE_THROTTLE_SUSPECT:         "blocked",
+	RESPONSE_EDNS_ALLERGY:             "formerr/edns",
 }
 
 var (
@@ -125,6 +133,7 @@ type ResolverRuntime struct {
 	zones          []string             /// tokens of the original domain
 	currentZone    string               /// the zone we are currently quering in (it's the parent zone of the current query subject (may be more than one label difference between the two))
 	prefNet        string               /// preferred network to use for upstream queries
+	eDNSAffinity   int                  /// notifies transport method to skip EDNS (consequently DNSSEC) altogether
 	transactions   []*transaction       /// a log of all the transactions until an answer is formulated
 	targetServers  map[string][]*entity /// a zone string to available nameservers map (the first level, "." is filled automatically)
 	redirections   []*dns.CNAME         /// a collection of all the redirections (that ultimately will make it into the answer section) until an answer can be formulated
@@ -191,7 +200,11 @@ func doQuery(rrt *ResolverRuntime, targetServer *entity, qname string, qtype uin
 	c, p := setupClient(rrt, targetServer)
 	c.Timeout = 5 * time.Second
 	m := new(dns.Msg)
-	m.SetQuestion(qname, qtype).SetEdns0(RECURSIVE_DNS_UDP_SIZE, true)
+	/// fetch EDNS allergy for server
+	ednsAllergy, ok := rrt.c.GetBool(rrt.provider, runtime.MapKey(runtime.KV_EDNS_ALLERGY, targetServer.ip))
+	if !ok || (ok && !ednsAllergy) {
+		m.SetQuestion(qname, qtype).SetEdns0(RECURSIVE_DNS_UDP_SIZE, true)
+	}
 	m.Compress = true
 	m.RecursionDesired = false
 
@@ -706,6 +719,19 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 			redirectResult.Answer = append(redirectResult.Answer, fetchRRByType(res, dns.TypeCNAME)...)
 			return setupResult(rrt, dns.RcodeSuccess, redirectResult), nil
 		}
+	case RESPONSE_EDNS_ALLERGY:
+		if rrt.eDNSAffinity == EDNS_ALLOWED {
+			rrt.eDNSAffinity = EDNS_SKIP
+			r, e := doQueryRecursively(rrt, _level)
+			rrt.eDNSAffinity = EDNS_ALLOWED
+			/// caching servers' EDNS allergy
+			for _, srv := range rrt.targetServers[currentZone] {
+				rrt.c.Put(rrt.provider, runtime.MapKey(runtime.KV_EDNS_ALLERGY, srv.ip), true)
+			}
+			return r, e
+		}
+		/// if we already tried a non-EDNS query, and it's still a formerr, go directly to the rate limiting case
+		fallthrough
 	case RESPONSE_THROTTLE_SUSPECT:
 		if rrt.blockTracker[currentToken] < RECURSIVE_DNS_NUM_BLOCKED_BEFORE_FAILURE-1 {
 			time.Sleep(time.Millisecond * RECURSIVE_DNS_WAIT_ON_RATELIMIT)
@@ -717,6 +743,7 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 		} else {
 			return setupResult(rrt, dns.RcodeServerFailure, nil), nil
 		}
+
 	case RESPONSE_UNKNOWN:
 		LogError(rrt, "Cannot determine the type of answer [%s]", res.String())
 		rrt.f.SendMessage(fmt.Sprintf("Cannot determine type of answer while resolving [%s/%s]", rrt.domain, dns.TypeToString[rrt.record]), rrt.provider)
@@ -891,8 +918,8 @@ func evaluateResponse(rrt *ResolverRuntime, qname string, qtype uint16, isFinal 
 		return RESPONSE_THROTTLE_SUSPECT
 	} else if r.Rcode == dns.RcodeFormatError {
 		/// suppose that we managed to properly calculate qname, qtype and qclass; let's interpret formerr as a rate limiting technique
-		rrt.blockTracker[qname]++
-		return RESPONSE_THROTTLE_SUSPECT
+		/// but first, optimistically, let's interpret it as the target server expressing that it does not fully support EDNS
+		return RESPONSE_EDNS_ALLERGY
 	}
 
 	return RESPONSE_UNKNOWN
