@@ -344,7 +344,7 @@ func NewResolverRuntime(rt *runtime.Runtime, lg *logrus.Entry, provider string, 
 
 	rrt = &ResolverRuntime{
 		c: rt.Cache, p: rt.IPPool, f: rt.SlackWH, s: rt.Stats, l: lg, original: incoming, provider: provider,
-		oomAlert: recursionStats, oomAlert2: recursionStats2, fileLogger: fileLogger,
+		oomAlert: recursionStats, oomAlert2: recursionStats2, fileLogger: fileLogger, eventualLogger: eventualLogger,
 	}
 	LogInfo(rrt, "Constructing resolver context, for [%s]/[%s]/[%s]", provider, incoming.Question[0].Name, dns.TypeToString[incoming.Question[0].Qtype])
 	/// session setup
@@ -357,7 +357,6 @@ func NewResolverRuntime(rt *runtime.Runtime, lg *logrus.Entry, provider string, 
 	rrt.record = rrt.original.Question[0].Qtype
 	rrt.transactions = []*transaction{}
 	rrt.blockTracker = make(map[string]int)
-	rrt.eventualLogger = eventualLogger
 	return
 }
 

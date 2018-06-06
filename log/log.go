@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"strings"
 
 	"github.com/mattn/go-colorable"
 	"github.com/sirupsen/logrus"
@@ -38,10 +39,13 @@ type EventualLogger []string
 // Queuef -- buffers the interpreted message to be written later
 func (l *EventualLogger) Queuef(format string, args ...interface{}) {
 	interpreted := fmt.Sprintf(format, args...)
+	lines := strings.Split(interpreted, "\n")
 	if *l == nil {
 		*l = make(EventualLogger, 0)
 	}
-	*l = append(*l, interpreted)
+	for _, line := range lines {
+		*l = append(*l, line+"\n")
+	}
 }
 
 // Flush -- writes out everything from buffer
@@ -49,6 +53,13 @@ func (l *EventualLogger) Flush(target *logrus.Entry) {
 	for _, e := range *l {
 		//target.Infof(e)
 		fmt.Printf("%s", e)
+	}
+}
+
+// FlushPrefixed -- just like Flush(), applies the specified prefix to all lines
+func (l *EventualLogger) FlushExt(target *logrus.Entry, prefix string) {
+	for _, e := range *l {
+		fmt.Printf("%s%s", prefix, e)
 	}
 }
 
