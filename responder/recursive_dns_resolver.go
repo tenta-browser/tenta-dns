@@ -191,7 +191,8 @@ func doQuery(rrt *ResolverRuntime, targetServer *entity, qname string, qtype uin
 	c, p := setupClient(rrt, targetServer)
 	c.Timeout = 5 * time.Second
 	m := new(dns.Msg)
-	m.SetQuestion(qname, qtype).SetEdns0(RECURSIVE_DNS_UDP_SIZE, true)
+	// m.SetQuestion(qname, qtype).SetEdns0(RECURSIVE_DNS_UDP_SIZE, true)
+	m.SetQuestion(qname, qtype).SetEdns0(RECURSIVE_DNS_UDP_SIZE, doWeReturnDNSSEC(rrt))
 	m.Compress = true
 	m.RecursionDesired = false
 
