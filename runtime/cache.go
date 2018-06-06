@@ -354,11 +354,11 @@ func (d *DNSCache) retrieve(domain string, t uint16, dnssec bool) (ret interface
 		/// if item is queried before rounded eviction time
 		if v.timeCreated().Add(v.validity()).Before(time.Now()) {
 			// d.lg.Debugf("Deleting record, because [%v] + [%v] > [%v]", v.timeCreated(), v.validity(), time.Now())
-			defer func () {
+			defer func() {
 				dom.m.Lock()
 				delete(interm, k)
 				dom.m.Unlock()
-			}
+			}()
 			continue
 		} else { /// if opaque cache item has valid TTL
 			// d.lg.Debugf("Item is within validity period. Returning as requested, or as possible.")
