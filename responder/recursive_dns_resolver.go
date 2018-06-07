@@ -81,6 +81,7 @@ const (
 	RESPONSE_ANSWER
 	RESPONSE_ANSWER_REDIRECT
 	RESPONSE_ANSWER_HIDDEN
+	RESPONSE_ANSWER_ALTERNATIVE
 	RESPONSE_DELEGATION
 	RESPONSE_DELEGATION_GLUE
 	RESPONSE_DELEGATION_AUTHORITATIVE
@@ -98,6 +99,7 @@ var responseTypeToString = map[int]string{
 	RESPONSE_ANSWER:                   "answer",
 	RESPONSE_ANSWER_REDIRECT:          "answer/redirect",
 	RESPONSE_ANSWER_HIDDEN:            "lucky",
+	RESPONSE_ANSWER_ALTERNATIVE:       "answer/alternative",
 	RESPONSE_DELEGATION:               "delegation",
 	RESPONSE_DELEGATION_GLUE:          "delegation/glue",
 	RESPONSE_DELEGATION_AUTHORITATIVE: "delegation/authoritative",
@@ -629,6 +631,9 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 		LogInfo(rrt, "Got a tricky answer. Extracting, and returning it.")
 		answers := fetchRRByType(res, rrt.record)
 		return setupResult(rrt, dns.RcodeSuccess, answers), nil
+	case RESPONSE_ANSWER_ALTERNATIVE:
+		LogInfo(rrt, "We have a nodata with alternative qtype")
+		return setupResult(rrt, dns.RcodeSuccess, res.Answer), nil
 	case RESPONSE_DELEGATION_GLUE:
 		LogInfo(rrt, "Got delegation /w glue records.")
 		servers := []*entity{}
@@ -918,6 +923,11 @@ func evaluateResponse(rrt *ResolverRuntime, qname string, qtype uint16, isFinal 
 		/// check NODATA
 		if r.Answer == nil {
 			return RESPONSE_NODATA
+		}
+
+		if (qtype == dns.TypeA && fetchRRByType(r, dns.TypeAAAA) != nil) ||
+			(qtype == dns.TypeAAAA && fetchRRByType(r, dns.TypeA) != nil) {
+			return RESPONSE_ANSWER_ALTERNATIVE
 		}
 
 	} else if r.Rcode == dns.RcodeNameError {
