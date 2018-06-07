@@ -530,6 +530,8 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 		if qtype == dns.TypeDS {
 			currentToken = rrt.domain
 		}
+	} else if !isFinalQuestion && isBottomLevel(rrt, _level+1) { /// aka, the next one would be final
+		qtype = rrt.record
 	}
 	LogInfo(rrt, "CurrentZone [%s], CurrentToken [%s], isFinal [%v]", currentZone, currentToken, isFinalQuestion)
 	cachedRR, extra := rrt.c.Retrieve(rrt.provider, currentToken, qtype, doWeReturnDNSSEC(rrt))
