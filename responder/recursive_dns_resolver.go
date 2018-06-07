@@ -545,6 +545,7 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 			/// TODO: find a way to utilize target servers as authority section records
 		} else { /// not last question, we use it to set up next level, and shortcut there
 			rrt.targetServers[currentToken] = fetchNSAsEntity(rrt, currentToken, false, false)
+			rrt.currentZone = currentToken
 			return doQueryRecursively(rrt, _level+1)
 		}
 	}
