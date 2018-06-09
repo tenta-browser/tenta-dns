@@ -1088,7 +1088,15 @@ func validateDNSKEY(rrt *ResolverRuntime, currentToken string, dks []*dns.DNSKEY
 	validatedAtLeastOne := false
 	for _, dk := range mainDNSKEYs {
 		for _, ds := range dss {
-			if ds.Header().Rrtype == dns.TypeDS && equalsDS(ds.(*dns.DS), dk.ToDS(ds.(*dns.DS).DigestType)) {
+			dsDS, ok := ds.(*dns.DS)
+			if !ok {
+				continue
+			}
+			dkDS := dk.ToDS(dsDS.DigestType)
+			if dsDS == nil || dkDS == nil {
+				continue
+			}
+			if equalsDS(dsDS, dkDS) {
 				validatedAtLeastOne = true
 			}
 		}
