@@ -269,13 +269,15 @@ func resolveParallelHarness(rrt *ResolverRuntime, target []*dns.NS) (result []*e
 			answer, _ := Resolve(NewResolverRuntime(&runtime.Runtime{Cache: rrt.c, IPPool: rrt.p, SlackWH: rrt.f, Stats: rrt.s}, rrt.l, rrt.provider, question, rrt.oomAlert, rrt.oomAlert2, rrt.fileLogger, rrt.eventualLogger))
 			if answer != nil {
 				answer.Question = question.Question
-				achan <- answer
 			}
+			achan <- answer
 		}(q)
 	}
 	counter := 0
+	breakOut := 0
 	for {
-		if counter == len(input) {
+		/// give a generous 3 second deadline
+		if counter == len(input) || breakOut >= 3000 {
 			break
 		}
 		select {
@@ -289,6 +291,7 @@ func resolveParallelHarness(rrt *ResolverRuntime, target []*dns.NS) (result []*e
 				}
 			}
 		case <-time.After(100 * time.Millisecond):
+			breakOut += 100
 			break
 		}
 	}
