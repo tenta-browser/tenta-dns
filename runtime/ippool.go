@@ -23,10 +23,11 @@
 package runtime
 
 import (
-	"github.com/tenta-browser/tenta-dns/log"
 	"math/rand"
 	"net"
 	"time"
+
+	"github.com/tenta-browser/tenta-dns/log"
 )
 
 type Pool struct {
@@ -48,14 +49,13 @@ func StartIPPool(cfgIPs []string) *Pool {
 		}
 		l.Infof("Initialized IP Pool with [%v]", ips)
 	}
-
 	return &Pool{ips, rand.New(rand.NewSource(time.Now().UnixNano()))}
 }
 
 func (p *Pool) RandomizeUDPDialer() *net.Dialer {
 	ret := &net.Dialer{}
 	if len(p.p) > 0 {
-		ret.LocalAddr = &net.UDPAddr{IP: p.p[p.r.Intn(len(p.p))]}
+		ret.LocalAddr = &net.UDPAddr{IP: p.p[rand.Intn(len(p.p))]}
 	}
 	return ret
 }
@@ -63,7 +63,7 @@ func (p *Pool) RandomizeUDPDialer() *net.Dialer {
 func (p *Pool) RandomizeTCPDialer() *net.Dialer {
 	ret := &net.Dialer{}
 	if len(p.p) > 0 {
-		ret.LocalAddr = &net.TCPAddr{IP: p.p[p.r.Intn(len(p.p))]}
+		ret.LocalAddr = &net.TCPAddr{IP: p.p[rand.Intn(len(p.p))]}
 	}
 	return ret
 }
