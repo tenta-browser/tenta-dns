@@ -23,7 +23,6 @@
 package runtime
 
 import (
-	"math"
 	"strings"
 	"sync"
 	"time"
@@ -343,10 +342,10 @@ func (d *DNSCache) insertInternal(_domain string, cachee opaqueCacheItem) {
 	}
 	dom.l[rrtype][cachee.mapKey()] = cachee
 	/// submit item for cleanup
-	d.c.c <- &cleanupItem{
-		domain, rrtype, cachee.mapKey(),
-		time.Now().Unix() +
-			int64(cachee.validity()/time.Second)}
+	// d.c.c <- &cleanupItem{
+	// 	domain, rrtype, cachee.mapKey(),
+	// 	time.Now().Unix() +
+	// 		int64(cachee.validity()/time.Second)}
 }
 
 func (d *DNSCache) retrieve(domain string, t uint16, dnssec bool) (ret interface{}, extra *ItemCacheExtra) {
@@ -390,10 +389,17 @@ func (d *DNSCache) retrieve(domain string, t uint16, dnssec bool) (ret interface
 				// }(dom.m)
 				src := v.(*responseCache).Msg
 				retResp := cloneResponse(src)
-				for _, holder := range [][]dns.RR{src.Answer, src.Ns, cleanAdditionalSection(src.Extra)} {
+				for hldIndex, holder := range [][]dns.RR{src.Answer, src.Ns, cleanAdditionalSection(src.Extra)} {
 					for _, rr := range holder {
 						if rr != nil {
 							rr.Header().Ttl = rr.Header().Ttl - uint32(time.Now().Sub(v.timeCreated())/time.Second)
+						} else if hldIndex == 0 { /// if a record got stale from the answer section, remove this entry from cache
+							defer func() {
+								dom.m.Lock()
+								delete(interm, k)
+								dom.m.Unlock()
+							}()
+							continue
 						}
 					}
 				}
@@ -407,7 +413,16 @@ func (d *DNSCache) retrieve(domain string, t uint16, dnssec bool) (ret interface
 				// 	m.Unlock()
 				// }(dom.m)
 				retRR := dns.Copy(v.(*itemCache).RR)
-				retRR.Header().Ttl = retRR.Header().Ttl - uint32(time.Now().Sub(v.timeCreated())/time.Second)
+				if retRR.Header().Ttl > uint32(time.Now().Sub(v.timeCreated())/time.Second) {
+					retRR.Header().Ttl = retRR.Header().Ttl - uint32(time.Now().Sub(v.timeCreated())/time.Second)
+				} else {
+					defer func() {
+						dom.m.Lock()
+						delete(interm, k)
+						dom.m.Unlock()
+					}()
+					continue
+				}
 				retRegular = append(retRegular, retRR)
 				if extra == nil && v.(*itemCache).val != nil {
 					extra = v.(*itemCache).val
@@ -470,40 +485,49 @@ func (d *DNSCache) startCleanup() {
 		for {
 			select {
 			/// time for cleanup
-			case <-d.c.t.C:
-				/// update origin
-				d.c.o += CACHE_EVICTION_RATE
-				/// get cleanable elements
-				evictees := d.c.i[d.c.o]
-				/// cycle all elements and remove references to them
-				for _, e := range evictees {
-					d.m.RLock()
-					dom, ok := d.l[e.firstKey]
-					if !ok {
-						d.m.RUnlock()
-						/// this should raise some eyebrows
-						continue
-					}
-					dom.m.Lock()
-					d.m.RUnlock()
-					/// we delete the key
-					delete(dom.l[e.secondKey], e.key)
-					/// if we left the type map empty, delete the type index too
-					if len(dom.l[e.secondKey]) == 0 {
-						delete(dom.l, e.secondKey)
-					}
-					dom.m.Unlock()
-				}
+			// case <-d.c.t.C:
+			// 	/// update origin
+			// 	d.c.o += CACHE_EVICTION_RATE
+			// 	/// get cleanable elements
+			// 	evictees := d.c.i[d.c.o]
+			// 	/// cycle all elements and remove references to them
+			// 	cleanStart := time.Now()
+			// 	timeWait := time.Duration(0)
+			// 	for _, e := range evictees {
+
+			// 		fmt.Printf("Evicting [%s/%s/%s]\n", e.firstKey, dns.TypeToString[e.secondKey], e.key)
+			// 		yolo := time.Now()
+			// 		d.m.RLock()
+			// 		timeWait += time.Now().Sub(yolo)
+			// 		dom, ok := d.l[e.firstKey]
+			// 		if !ok {
+			// 			d.m.RUnlock()
+			// 			/// this should raise some eyebrows
+			// 			continue
+			// 		}
+			// 		yolo = time.Now()
+			// 		dom.m.Lock()
+			// 		timeWait += time.Now().Sub(yolo)
+			// 		d.m.RUnlock()
+			// 		/// we delete the key
+			// 		delete(dom.l[e.secondKey], e.key)
+			// 		/// if we left the type map empty, delete the type index too
+			// 		if len(dom.l[e.secondKey]) == 0 {
+			// 			delete(dom.l, e.secondKey)
+			// 		}
+			// 		dom.m.Unlock()
+			// 	}
+			// 	d.lg.Infof("Evicted [%d] items, in %v time out of which %v was lockwait", len(evictees), time.Now().Sub(cleanStart), timeWait)
 			case <-d.c.q:
 				/// maybe a simple return would suffice here?
 				isQuitting = true
 				break
-			case target := <-d.c.c:
-				if target.when < d.c.o+CACHE_EVICTION_RATE {
-					continue
-				}
-				index := d.c.o + int64(math.Floor(float64(target.when-d.c.o)/float64(CACHE_EVICTION_RATE)))
-				d.c.i[index] = append(d.c.i[index], target)
+				// case target := <-d.c.c:
+				// 	if target.when < d.c.o+CACHE_EVICTION_RATE {
+				// 		continue
+				// 	}
+				// 	index := d.c.o + int64(math.Floor(float64(target.when-d.c.o)/float64(CACHE_EVICTION_RATE)))
+				// 	d.c.i[index] = append(d.c.i[index], target)
 			}
 			if isQuitting == true {
 				break
@@ -515,6 +539,7 @@ func (d *DNSCache) startCleanup() {
 
 func (d *DNSCache) stopCleanup() {
 	d.c.q <- true
+	d.lg.Debugf("Sent stop signal to cache cleaner")
 	d.c.w.Wait()
 }
 
