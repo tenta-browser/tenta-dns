@@ -191,7 +191,7 @@ func (dir *Director) doOrchestrate(systemd bool) {
 	bgpupdates, bgpstopper, bgpwait := anycast.AdvertiseRoutes(dir.h.MasterConfig.BGP, dir.h.MasterConfig.Peers, dir.h.MasterConfig.Netblocks, interfaces)
 	statsreceiver := dir.r.Stats.AddBroadcastWatcher()
 	run := true
-	forced := false
+	forced := 0
 	for run {
 		select {
 		case <-dir.stop:
@@ -240,7 +240,7 @@ func (dir *Director) doOrchestrate(systemd bool) {
 			dir.lg.Debugf("Got BGP update %s", b.String())
 			if b.Status == anycast.RouteStatusCriticalFailure {
 				dir.lg.Errorf("Forcing shutdown due to bgp subsystem failure")
-				forced = true
+				forced = 1
 				goto stop
 			}
 			break
@@ -248,7 +248,7 @@ func (dir *Director) doOrchestrate(systemd bool) {
 			dir.lg.Debugf("Got network update %s", u.String())
 			if u.State == common.StateCriticalFailure {
 				dir.lg.Errorf("Forcing shutdown due to network subsystem failure")
-				forced = true
+				forced = 2
 				goto stop
 			}
 			if u.State == common.StateUp {
@@ -314,8 +314,8 @@ func (dir *Director) doOrchestrate(systemd bool) {
 	netwait.Wait()
 
 	dir.lg.Debug("Stopped")
-	if forced {
-		dir.lg.Debug("Force Stopped")
+	if forced > 0 {
+		dir.lg.Debugf("Force Stopped (code %d)", forced)
 		os.Exit(201)
 	}
 }
@@ -350,6 +350,9 @@ func domainLister(doms map[string]*runtime.ServerDomain, includedns bool, includ
 				}
 				if d.DnsTlsPort != runtime.PORT_DISABLED {
 					ret = append(ret, startdata{fmt.Sprintf("dns-tls://%s:%d/", d.IPv4, d.DnsUdpPort), true, "tls", d})
+				}
+				if d.HttpsPort != runtime.PORT_DISABLED {
+					ret = append(ret, startdata{fmt.Sprintf("dns-https://%s:%d/", d.IPv4, d.DnsUdpPort), true, "https", d})
 				}
 			}
 			if includehttp {
