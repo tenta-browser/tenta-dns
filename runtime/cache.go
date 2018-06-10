@@ -383,13 +383,32 @@ func (d *DNSCache) retrieve(domain string, t uint16, dnssec bool) (ret interface
 			// d.lg.Debugf("Item is within validity period. Returning as requested, or as possible.")
 			if dnssec && v.isDNSSECStore() { /// if we need dnssec and we have a dnssec response, we return *the* response (only one of those per RRtype)
 				// d.lg.Debugf("Returning DNSSEC cache -- [%v]", v.(*responseCache).Msg.Question[0])
-				v.adjustValidity(int64(-time.Now().Sub(v.timeCreated()) / time.Second))
+				// defer func(m *sync.RWMutex) {
+				// 	m.Lock()
+				// 	v.adjustValidity(int64(-time.Now().Sub(v.timeCreated()) / time.Second))
+				// 	m.Unlock()
+				// }(dom.m)
+				src := v.(*responseCache).Msg
+				retResp := cloneResponse(src)
+				for _, holder := range [][]dns.RR{src.Answer, src.Ns, cleanAdditionalSection(src.Extra)} {
+					for _, rr := range holder {
+						if rr != nil {
+							rr.Header().Ttl = rr.Header().Ttl - uint32(time.Now().Sub(v.timeCreated())/time.Second)
+						}
+					}
+				}
 				dom.m.RUnlock()
-				return v.(*responseCache).Msg, nil
+				return retResp, nil
 			} else if !v.isDNSSECStore() {
 				// d.lg.Debugf("Returning regular cache item -- [%v]", v.(*itemCache).RR)
-				v.adjustValidity(int64(-time.Now().Sub(v.timeCreated()) / time.Second))
-				retRegular = append(retRegular, v.(*itemCache).RR)
+				// defer func(m *sync.RWMutex) {
+				// 	m.Lock()
+				// v.adjustValidity(int64(-time.Now().Sub(v.timeCreated()) / time.Second))
+				// 	m.Unlock()
+				// }(dom.m)
+				retRR := dns.Copy(v.(*itemCache).RR)
+				retRR.Header().Ttl = retRR.Header().Ttl - uint32(time.Now().Sub(v.timeCreated())/time.Second)
+				retRegular = append(retRegular, retRR)
 				if extra == nil && v.(*itemCache).val != nil {
 					extra = v.(*itemCache).val
 				}
@@ -404,6 +423,34 @@ func (d *DNSCache) retrieve(domain string, t uint16, dnssec bool) (ret interface
 	var retDummyDnssec *dns.Msg
 	dom.m.RUnlock()
 	return retDummyDnssec, nil
+}
+
+func cleanAdditionalSection(extra []dns.RR) (clean []dns.RR) {
+	for _, rr := range extra {
+		if rr != nil && rr.Header().Rrtype != dns.TypeOPT {
+			clean = append(clean, rr)
+		}
+	}
+	return
+}
+
+func cloneSection(s []dns.RR) (out []dns.RR) {
+	for _, rr := range s {
+		if rr != nil {
+			out = append(out, dns.Copy(rr))
+		}
+	}
+	return
+}
+
+func cloneResponse(in *dns.Msg) (out *dns.Msg) {
+	out = &dns.Msg{MsgHdr: in.MsgHdr}
+	out.Question = make([]dns.Question, len(in.Question))
+	copy(in.Question, out.Question)
+	out.Answer = cloneSection(in.Answer)
+	out.Ns = cloneSection(in.Ns)
+	out.Extra = cloneSection(in.Extra)
+	return
 }
 
 /*

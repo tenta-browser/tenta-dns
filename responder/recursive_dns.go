@@ -114,7 +114,7 @@ var (
 	targetNS             = func() *string { t := ""; return &t }()    //flag.String("ns", "", "Resolver to use in client mode")
 	targetNSName         = func() *string { t := ""; return &t }()    //flag.String("nshostname", "", "Resolver name to use in client mode")
 	certCache            = func() *string { t := ""; return &t }()    //flag.String("certcache", "", "Use the specified path for local certificate cache")
-	dnssecEnabled        = func() *bool { t := false; return &t }()   //flag.Bool("dnssec", false, "starts server in dnssec enabled mode")
+	dnssecEnabled        = func() *bool { t := true; return &t }()    //flag.Bool("dnssec", false, "starts server in dnssec enabled mode")
 	forgivingDNSSECCheck = false
 	preferredProtocol    = "udp"
 	/// TODO -- externalize as a config directive the ips of root servers (both iana and opennic)
@@ -1850,9 +1850,9 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 			return
 		}
 
-		l = l.WithField("domain", r.Question[0].Name)
+		lg := l.WithField("domain", r.Question[0].Name)
 		fLogger, _ := os.Create(RECURSIVE_DNS_FILE_LOGGING_LOCATION + r.Question[0].Name + "." + dns.TypeToString[r.Question[0].Qtype])
-		rrt := NewResolverRuntime(rt, l, provider, r, 0, 0, fLogger, &nlog.EventualLogger{})
+		rrt := NewResolverRuntime(rt, lg, provider, r, 0, 0, fLogger, &nlog.EventualLogger{})
 		result, e := Resolve(rrt)
 		prePrefix := ""
 		/// debug slow queries
@@ -1937,7 +1937,6 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 }
 
 func ServeDNS(cfg runtime.RecursorConfig, rt *runtime.Runtime, v4 bool, net string, d *runtime.ServerDomain, opennicMode bool, dnssecMode bool) {
-	*dnssecEnabled = dnssecMode
 	*debugLevel = true
 	provider := PROVIDER_TENTA
 	if opennicMode == true {
