@@ -315,7 +315,8 @@ func (dir *Director) doOrchestrate(systemd bool) {
 
 	dir.lg.Debug("Stopped")
 	if forced {
-		os.Exit(5)
+		dir.lg.Debug("Force Stopped")
+		os.Exit(201)
 	}
 }
 
