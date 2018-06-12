@@ -1854,7 +1854,10 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 		}
 
 		lg := l.WithField("domain", qname)
-		fLogger, _ := os.Create(RECURSIVE_DNS_FILE_LOGGING_LOCATION + qname + "." + dns.TypeToString[qtype])
+		var fLogger *os.File
+		if LOGGING == LOGGING_FILE {
+			fLogger, _ = os.Create(RECURSIVE_DNS_FILE_LOGGING_LOCATION + qname + "." + dns.TypeToString[qtype])
+		}
 		rrt := NewResolverRuntime(rt, lg, provider, r, 0, 0, fLogger, &nlog.EventualLogger{})
 		result, e := Resolve(rrt)
 		prePrefix := ""
