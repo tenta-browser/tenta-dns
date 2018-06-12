@@ -553,9 +553,12 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 			return setupResult(rrt, dns.RcodeSuccess, cachedRR), nil
 			/// TODO: find a way to utilize target servers as authority section records
 		} else { /// not last question, we use it to set up next level, and shortcut there
-			rrt.targetServers[currentToken] = fetchNSAsEntity(rrt, currentToken, false, false)
-			rrt.currentZone = currentToken
-			return doQueryRecursively(rrt, _level+1)
+			fetchedEntities := fetchNSAsEntity(rrt, currentToken, false, false)
+			if fetchedEntities != nil {
+				rrt.targetServers[currentToken] = fetchedEntities
+				rrt.currentZone = currentToken
+				return doQueryRecursively(rrt, _level+1)
+			}
 		}
 	}
 	/// at this point we know that we can't skip an rtt to the NSes
