@@ -27,6 +27,7 @@ import (
 	"bytes"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"fmt"
 	"log"
 	"math/rand"
@@ -1907,12 +1908,18 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 			}
 
 			if qname == "" || qtype == 0 {
-				w.Write([]byte("Arg error"))
+				w.WriteHeader(400)
+				return
 			}
-			if _, e := prepareAnswer(newDNSQuery(qname, qtype), &netpackage.TCPAddr{IP: netpackage.ParseIP(r.RemoteAddr)}); e != nil {
-				w.Write([]byte("servfault"))
+			if ret, e := prepareAnswer(newDNSQuery(qname, qtype), &netpackage.TCPAddr{IP: netpackage.ParseIP(r.RemoteAddr)}); e != nil {
+				w.WriteHeader(500)
+				return
 			} else {
-				w.Write([]byte("success"))
+				if jsonRet, err := json.Marshal(JSONFromMsg(ret)); err != nil {
+					w.WriteHeader(503)
+				} else {
+					w.Write(jsonRet)
+				}
 			}
 			return
 		}
@@ -1961,7 +1968,20 @@ func ServeDNS(cfg runtime.RecursorConfig, rt *runtime.Runtime, v4 bool, net stri
 			Handler: mux,
 		}
 
-		restDNS.ListenAndServeTLS(d.CertFile, d.KeyFile)
+		defer rt.OnFinishedOrPanic(func() {
+			restDNS.Close()
+			lg.Infof("Stopped %s dns resolver on %s", net, addr)
+			rt.SlackWH.SendMessage("shutting down.", operator)
+		}, pchan)
+		defer func() {
+			if rcv := recover(); rcv != nil {
+				snd := &StackAddedPanic{debug.Stack(), rcv}
+				fmt.Printf("Panic in ListenAndServeTLS [%s]\n", snd)
+				pchan <- snd
+			}
+		}()
+
+		go restDNS.ListenAndServeTLS(d.CertFile, d.KeyFile)
 		return
 	}
 

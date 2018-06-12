@@ -25,12 +25,13 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/tenta-browser/tenta-dns/director"
-	"github.com/tenta-browser/tenta-dns/log"
-	"github.com/tenta-browser/tenta-dns/runtime"
 	"os"
 	"os/signal"
 	"syscall"
+
+	"github.com/tenta-browser/tenta-dns/director"
+	"github.com/tenta-browser/tenta-dns/log"
+	"github.com/tenta-browser/tenta-dns/runtime"
 
 	"github.com/coreos/go-systemd/daemon"
 	"github.com/sirupsen/logrus"

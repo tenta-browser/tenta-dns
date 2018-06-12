@@ -65,9 +65,10 @@ const (
 )
 
 const (
-	NETWORK_UDP = "udp"
-	NETWORK_TCP = "tcp"
-	NETWORK_TLS = "tcp-tls"
+	NETWORK_UDP   = "udp"
+	NETWORK_TCP   = "tcp"
+	NETWORK_TLS   = "tcp-tls"
+	NETWORK_HTTPS = "https"
 )
 
 const (
@@ -535,9 +536,10 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 		if qtype == dns.TypeDS {
 			currentToken = rrt.domain
 		}
-	} else if !isFinalQuestion && isBottomLevel(rrt, _level+1) { /// aka, the next one would be final
-		qtype = rrt.record
 	}
+	//  else if !isFinalQuestion && isBottomLevel(rrt, _level+1) { /// aka, the next one would be final
+	// 	qtype = rrt.record
+	// }
 	LogInfo(rrt, "CurrentZone [%s], CurrentToken [%s], isFinal [%v]", currentZone, currentToken, isFinalQuestion)
 	cachedRR, extra := rrt.c.Retrieve(rrt.provider, currentToken, qtype, doWeReturnDNSSEC(rrt))
 	if r, e, p := handleExtras(rrt, cachedRR, extra); p {
@@ -595,10 +597,8 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 				return setupResult(rrt, dns.RcodeServerFailure, nil), fmt.Errorf("bogus DNSSEC response")
 			}
 		}
-
 		/// TODO: add record security check
 		cacheResponse(rrt, res, answerType)
-
 		if answerType != RESPONSE_NODATA && answerType != RESPONSE_NXDOMAIN &&
 			answerType != RESPONSE_EDNS_ALLERGY && answerType != RESPONSE_THROTTLE_SUSPECT {
 			rrt.currentZone = currentToken
