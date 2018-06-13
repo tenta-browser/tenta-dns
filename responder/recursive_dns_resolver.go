@@ -1166,9 +1166,8 @@ func validateRRSIG(rrt *ResolverRuntime, currentZone string, in *dns.Msg) bool {
 					}
 					LogInfo(rrt, "Found KEY with tag [%d] :: [%s]", rrSig.KeyTag, dks.String())
 					/// try to validate: signature isnt expired, validate with global or validate with local filter
-					if rrSig.ValidityPeriod(time.Now()) && (rrSig.Verify(dks.(*dns.DNSKEY), rrFilter[rrSig.TypeCovered][rrSig.Header().Name]) != nil ||
-						rrSig.Verify(dks.(*dns.DNSKEY), rrLFilter[rrSig.TypeCovered][rrSig.Header().Name]) != nil ||
-						rrSig.Verify(dks.(*dns.DNSKEY), []dns.RR{dks}) != nil) {
+					if rrSig.ValidityPeriod(time.Now()) && (rrSig.Verify(dks.(*dns.DNSKEY), rrFilter[rrSig.TypeCovered][rrSig.Header().Name]) == nil ||
+						rrSig.Verify(dks.(*dns.DNSKEY), rrLFilter[rrSig.TypeCovered][rrSig.Header().Name]) == nil) {
 						rrSigValid = true
 						break
 					} else {
