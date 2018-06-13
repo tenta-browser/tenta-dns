@@ -672,7 +672,10 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 			rrt.targetServers[currentToken] = rrt.targetServers[currentZone]
 			return doQueryRecursively(rrt, _level+1)
 		}
-		rrt.c.Insert(rrt.provider, currentToken, dns.TypeToRR[qtype](), &runtime.ItemCacheExtra{Nodata: true})
+		if fun, ok := dns.TypeToRR[qtype]; ok {
+			rrt.c.Insert(rrt.provider, currentToken, fun(), &runtime.ItemCacheExtra{Nodata: true})
+		}
+
 		if doWeReturnDNSSEC(rrt) && isDNSSECResponse(res) {
 			return setupResult(rrt, res.Rcode, res), nil
 		} else {
