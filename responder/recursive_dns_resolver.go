@@ -1859,6 +1859,10 @@ func getRootTrustAnchors(rt *runtime.Runtime, l *logrus.Entry, provider string) 
 		return RR_NAVIGATOR_NEXT
 	})
 
+	time.AfterFunc(24*time.Hour, func() {
+		getRootTrustAnchors(rt, l, provider)
+	})
+
 	return nil
 }
 
@@ -1870,7 +1874,7 @@ func getZoneAXFR(rt *runtime.Runtime, l *logrus.Entry, provider, zone string) er
 	if e != nil {
 		return fmt.Errorf("cannot execute zone transfer [%s]", e.Error())
 	}
-
+	nextIteration := uint32(72 * time.Hour / time.Second)
 	for env := range r {
 		if env.Error != nil {
 			l.Infof("Zone transfer envelope error [%s]", env.Error.Error())
@@ -1879,11 +1883,18 @@ func getZoneAXFR(rt *runtime.Runtime, l *logrus.Entry, provider, zone string) er
 		for _, rr := range env.RR {
 			switch rr.(type) {
 			case *dns.A, *dns.AAAA, *dns.NS, *dns.DS, *dns.DNSKEY:
+				if (rr.Header().Rrtype == dns.TypeDS || rr.Header().Rrtype == dns.TypeDNSKEY) &&
+					rr.Header().Ttl > 0 && rr.Header().Ttl < nextIteration {
+					nextIteration = rr.Header().Ttl
+				}
 				rt.Cache.Insert(provider, rr.Header().Name, rr, EXTRA_EMPTY)
 			}
 		}
-
 	}
+	l.Infof("Scheduling next AXFR for zone [%s] in %d", zone, nextIteration)
+	time.AfterFunc(time.Duration(nextIteration)*time.Second, func() {
+		getZoneAXFR(rt, l, provider, zone)
+	})
 
 	return nil
 }
