@@ -603,7 +603,7 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 			}
 		}
 		/// TODO: add record security check
-		cacheResponse(rrt, res, answerType, source)
+		cacheResponse(rrt, res, answerType, currentToken, source)
 		if answerType != RESPONSE_NODATA && answerType != RESPONSE_NXDOMAIN &&
 			answerType != RESPONSE_EDNS_ALLERGY && answerType != RESPONSE_THROTTLE_SUSPECT {
 			rrt.currentZone = currentToken
@@ -829,9 +829,9 @@ func cosmetizeRecords(in *dns.Msg) {
 }
 
 /// convenience func to store a response or all records from it
-func cacheResponse(rrt *ResolverRuntime, in *dns.Msg, responseType int, source *entity) {
+func cacheResponse(rrt *ResolverRuntime, in *dns.Msg, responseType int, currentToken string, source *entity) {
 	isTrustedSource := isTrustedEntity(source, opennicRootServers)
-	if in.Question[0].Name == "." && rrt.provider == PROVIDER_OPENNIC && !isTrustedSource {
+	if currentToken == "." && rrt.provider == PROVIDER_OPENNIC && !isTrustedSource {
 		return
 	}
 	if isDNSSECResponse(in) && (fetchRRByType(in, in.Question[0].Qtype) != nil || fetchRRByType(in, dns.TypeCNAME) != nil) {
