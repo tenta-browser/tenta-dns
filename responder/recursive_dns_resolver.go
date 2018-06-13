@@ -163,6 +163,7 @@ type transaction struct {
 
 type parallelQueryResult struct {
 	r *dns.Msg
+	s *entity
 	e error
 }
 
@@ -302,17 +303,18 @@ func resolveParallelHarness(rrt *ResolverRuntime, target []*dns.NS) (result []*e
 
 /// launches a DNS query to all available and able servers, uses the first valid answer
 /// parallelism lies in the ask all the NSes _at the same time_
-func doQueryParallelHarness(rrt *ResolverRuntime, targetServers []*entity, qname string, qtype uint16) (*dns.Msg, error) {
+func doQueryParallelHarness(rrt *ResolverRuntime, targetServers []*entity, qname string, qtype uint16) (*dns.Msg, *entity, error) {
 	LogInfo(rrt, "Entering doQueryParallelHarness() with [%s][%s] -- [%v]", qname, dns.TypeToString[qtype], targetServers)
 	serversNum := len(targetServers)
 	routinesNum := serversNum + 1
 	if serversNum == 0 {
-		return nil, fmt.Errorf("there are no configured servers")
+		return nil, nil, fmt.Errorf("there are no configured servers")
 	}
 
 	if targetServers[0].zone == "." || THREADING == THREADING_NONE || atomic.LoadUint32(&masterGoroutineNum) >= RECURSIVE_DNS_MAX_GOROUTINES {
 		tsIndex := rand.Intn(serversNum)
-		return doQuery(rrt, targetServers[tsIndex], qname, qtype)
+		ret, e := doQuery(rrt, targetServers[tsIndex], qname, qtype)
+		return ret, targetServers[tsIndex], e
 	}
 
 	wg := &sync.WaitGroup{}
@@ -332,7 +334,7 @@ func doQueryParallelHarness(rrt *ResolverRuntime, targetServers []*entity, qname
 				wg.Done()
 			}()
 			r, e := doQuery(rrt, thisEntity, qname, qtype)
-			res <- &parallelQueryResult{r, e}
+			res <- &parallelQueryResult{r, thisEntity, e}
 			if atomic.AddInt32(&routinesDone, 1) == int32(len(targetServers)) {
 				close(res)
 			}
@@ -345,17 +347,17 @@ func doQueryParallelHarness(rrt *ResolverRuntime, targetServers []*entity, qname
 			continue
 		}
 		if r.r.Rcode == dns.RcodeSuccess {
-			return r.r, r.e
+			return r.r, r.s, r.e
 		} else {
 			secondBest = r
 		}
 	}
 	/// returns last erroneous result, for future reference
 	if r != nil && r.e != nil && secondBest != nil && secondBest.e == nil {
-		return secondBest.r, secondBest.e
+		return secondBest.r, secondBest.s, secondBest.e
 	}
 
-	return r.r, r.e
+	return r.r, r.s, r.e
 
 }
 
@@ -563,7 +565,7 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 	}
 	/// at this point we know that we can't skip an rtt to the NSes
 	networkRTTStart := time.Now()
-	res, err := doQueryParallelHarness(rrt, rrt.targetServers[currentZone], currentToken, qtype)
+	res, source, err := doQueryParallelHarness(rrt, rrt.targetServers[currentZone], currentToken, qtype)
 	answerType := RESPONSE_UNKNOWN
 	/// propagate back (this means, that all NSes returned an error)
 	if err != nil {
@@ -601,7 +603,7 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 			}
 		}
 		/// TODO: add record security check
-		cacheResponse(rrt, res, answerType)
+		cacheResponse(rrt, res, answerType, source)
 		if answerType != RESPONSE_NODATA && answerType != RESPONSE_NXDOMAIN &&
 			answerType != RESPONSE_EDNS_ALLERGY && answerType != RESPONSE_THROTTLE_SUSPECT {
 			rrt.currentZone = currentToken
@@ -827,13 +829,21 @@ func cosmetizeRecords(in *dns.Msg) {
 }
 
 /// convenience func to store a response or all records from it
-func cacheResponse(rrt *ResolverRuntime, in *dns.Msg, responseType int) {
+func cacheResponse(rrt *ResolverRuntime, in *dns.Msg, responseType int, source *entity) {
+	isTrustedSource := isTrustedEntity(source, opennicRootServers)
+	if in.Question[0].Name == "." && rrt.provider == PROVIDER_OPENNIC && !isTrustedSource {
+		return
+	}
 	if isDNSSECResponse(in) && (fetchRRByType(in, in.Question[0].Qtype) != nil || fetchRRByType(in, dns.TypeCNAME) != nil) {
 		rrt.c.InsertResponse(rrt.provider, in.Question[0].Name, in)
 	}
 
 	rrNavigator(in, func(rr dns.RR) int {
-		rrt.c.Insert(rrt.provider, rr.Header().Name, rr, EXTRA_EMPTY)
+		/// cache the record if either it's not about root level, or if it's root level and provider tenta,
+		/// or if it's root level, and opennic and is an opennic root server telling the information
+		if (rr.Header().Name == "." && ((rrt.provider == PROVIDER_OPENNIC && isTrustedSource) || (rrt.provider == PROVIDER_TENTA))) || rr.Header().Name != "." {
+			rrt.c.Insert(rrt.provider, rr.Header().Name, rr, EXTRA_EMPTY)
+		}
 		return RR_NAVIGATOR_NEXT
 	})
 
@@ -949,6 +959,16 @@ func evaluateResponse(rrt *ResolverRuntime, qname string, qtype uint16, isFinal 
 	}
 
 	return RESPONSE_UNKNOWN
+}
+
+/// func used to source the source of a dns message, allowing to keep opennic cache clean of iana data on root level
+func isTrustedEntity(source *entity, known []*entity) bool {
+	for _, ent := range known {
+		if ent.ip == source.ip && ent.name == source.name {
+			return true
+		}
+	}
+	return false
 }
 
 /// func used primarily (and solely) for checking whether a delegation to a sub-zone has the same servers as the parent zone
