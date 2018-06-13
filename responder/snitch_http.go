@@ -23,7 +23,6 @@
 package responder
 
 import (
-	"crypto/tls"
 	"fmt"
 	"github.com/tenta-browser/tenta-dns/log"
 	handlers "github.com/tenta-browser/tenta-dns/responder/http-handlers"
@@ -34,6 +33,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/sirupsen/logrus"
 	"encoding/base64"
+	"github.com/tenta-browser/tenta-dns/common"
 )
 
 func SnitchHTTPServer(cfg runtime.NSnitchConfig, rt *runtime.Runtime, v4 bool, net string, d *runtime.ServerDomain) {
@@ -145,24 +145,7 @@ func serveHTTPS(rt *runtime.Runtime, d *runtime.ServerDomain, ip string, port in
 		lg.Info("Shutdown HTTPS server")
 	}, pchan)
 
-	tlscfg := &tls.Config{
-		MinVersion:               tls.VersionTLS10,
-		CurvePreferences:         []tls.CurveID{tls.CurveP521, tls.CurveP384, tls.CurveP256},
-		PreferServerCipherSuites: true,
-		CipherSuites: []uint16{
-			tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,
-			tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,
-			tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
-			tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
-			tls.TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA,
-			tls.TLS_RSA_WITH_AES_256_GCM_SHA384,
-			tls.TLS_RSA_WITH_AES_128_GCM_SHA256,
-			tls.TLS_RSA_WITH_AES_256_CBC_SHA,
-			tls.TLS_RSA_WITH_3DES_EDE_CBC_SHA,
-		},
-	}
-
-	srv.TLSConfig = tlscfg
+	srv.TLSConfig = common.TLSConfigLegacyHTTPS()
 
 	lg.Info("Started listening for HTTPS")
 

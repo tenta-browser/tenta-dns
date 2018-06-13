@@ -2,6 +2,7 @@ package responder
 
 import (
 	"fmt"
+
 	"github.com/tenta-browser/tenta-dns/runtime"
 )
 
@@ -26,6 +27,11 @@ func hostInfo(v4 bool, net string, d *runtime.ServerDomain) (ip string, port int
 			panic("Unable to start a TLS recursive DNS server without a valid TLS port")
 		}
 		port = d.DnsTlsPort
+	} else if net == "https" {
+		if d.HttpsPort <= runtime.PORT_UNSET {
+			panic("Unable to start a HTTPS recursive DNS server without a valid HTTPS port")
+		}
+		port = d.HttpsPort
 	} else {
 		panic(fmt.Sprintf("Unknown network type %s", net))
 	}

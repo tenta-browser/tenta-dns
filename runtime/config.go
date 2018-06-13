@@ -63,6 +63,7 @@ type Config struct {
 	RateThreshold     uint64
 	OutboundIPs       []string
 	SlackFeedback     map[string]string
+	ThreadedResolver  bool
 }
 
 type NSnitchConfig struct {
@@ -76,8 +77,9 @@ type NSnitchConfig struct {
 	Blacklists   []string
 	WellKnowns   map[string]*WellKnown
 	BlacklistTTL int64
-	DnsReplyv4   []string
-	DnsReplyv6   []string
+	DnsReplyv4   string
+	DnsReplyv6   string
+	Domain       string
 }
 
 type RecursorConfig struct {
@@ -398,11 +400,20 @@ func parseNSnitchConfig(master Config, path string, lg *logrus.Entry, ignoreplat
 		lg.Errorf("Failed loading config file '%s': %s", path, err.Error())
 		return cfg, errors.New(fmt.Sprintf("Unable to open '%s': %s", path, err.Error()))
 	}
+	if cfg.DnsReplyv4 == "" && cfg.DnsReplyv6 == "" {
+		lg.Errorf("Misconfigured NSnitch instance '%f', missing `dnsreplyv(4/6)` directive", path)
+		return cfg, errors.New("missing dns reply configuration")
+	}
+	if cfg.Domain == "" {
+		lg.Errorf("Misconfigured NSnitch instance '%f', missing `domain` directive", path)
+		return cfg, errors.New("missing domain configuration")
+	}
 	for _, domain := range cfg.Domains {
 		err := validateAndDefaultDomain(master, lg, domain, path)
 		if err != nil {
 			return cfg, err
 		}
+		domain.HostName = cfg.Domain
 	}
 	if !ignoreplatform && len(cfg.Domains) < 1 {
 		lg.Warnf("Unable to parse NSnitch config: Contains no configured domains to bind to")

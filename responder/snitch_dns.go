@@ -70,22 +70,8 @@ func serveSnitchDNS(cfg runtime.NSnitchConfig, rt *runtime.Runtime, v4 bool, net
 				return
 			}
 
-			tlscfg := &tls.Config{
-				MinVersion:               tls.VersionTLS10,
-				Certificates:             []tls.Certificate{cert},
-				CurvePreferences:         []tls.CurveID{tls.CurveP521, tls.CurveP384, tls.CurveP256},
-				PreferServerCipherSuites: true,
-				CipherSuites: []uint16{
-					tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,
-					tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,
-					tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
-					tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
-					tls.TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA,
-					tls.TLS_RSA_WITH_AES_256_GCM_SHA384,
-					tls.TLS_RSA_WITH_AES_128_GCM_SHA256,
-					tls.TLS_RSA_WITH_AES_256_CBC_SHA,
-				},
-			}
+			tlscfg := common.TLSConfigDNS()
+			tlscfg.Certificates = []tls.Certificate{cert}
 
 			srv.Net = "tcp-tls"
 			srv.TLSConfig = tlscfg
@@ -109,7 +95,7 @@ func handleSnitch(cfg runtime.NSnitchConfig, rt *runtime.Runtime, d *runtime.Ser
 	return func(w dns.ResponseWriter, r *dns.Msg) {
 		var (
 			v4       bool
-			serverIp []dns.RR
+			serverIp dns.RR
 			//str       string
 			a       net.IP
 			queried string
@@ -185,18 +171,14 @@ func handleSnitch(cfg runtime.NSnitchConfig, rt *runtime.Runtime, d *runtime.Ser
 		}
 
 		if v4 {
-			for _, confA := range cfg.DnsReplyv4 {
-				serverIp = append(serverIp, &dns.A{
-					Hdr: dns.RR_Header{Name: queried, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 0},
-					A:   net.ParseIP(confA),
-				})
+			serverIp = &dns.A{
+				Hdr: dns.RR_Header{Name: queried, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 0},
+				A:   net.ParseIP(cfg.DnsReplyv4),
 			}
 		} else {
-			for _, confAAAA := range cfg.DnsReplyv6 {
-				serverIp = append(serverIp, &dns.AAAA{
-					Hdr:  dns.RR_Header{Name: queried, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: 0},
-					AAAA: net.ParseIP(confAAAA),
-				})
+			serverIp = &dns.AAAA{
+				Hdr:  dns.RR_Header{Name: queried, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: 0},
+				AAAA: net.ParseIP(cfg.DnsReplyv6),
 			}
 		}
 
@@ -295,7 +277,7 @@ func handleSnitch(cfg runtime.NSnitchConfig, rt *runtime.Runtime, d *runtime.Ser
 			skipdb = true
 		}
 		writeA := func() {
-			m.Answer = append(m.Answer, serverIp...)
+			m.Answer = append(m.Answer, serverIp)
 			//m.Extra = append(m.Extra, t)
 		}
 		writeCAA := func() {

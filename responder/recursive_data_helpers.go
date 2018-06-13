@@ -330,7 +330,7 @@ func storeCache(provider, domain string, _recordLiteral interface{}) (time.Durat
 			}
 
 			// logger.debug("Trying to store [%s/%s] [%v] for [%d]\n", provider, domain, rr, savedTTL)
-			t.Add(strToAdd, time.Duration(savedTTL+1)*time.Second, &DomainCache{false, savedTTL})
+			t.Add(strToAdd, time.Duration(savedTTL+1)*time.Second, &DomainCache{true, savedTTL})
 			rr.Header().Ttl = savedTTL
 		}
 		for i, ptr := range ulteriorRR {

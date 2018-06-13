@@ -27,12 +27,17 @@ import (
 	"bytes"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"fmt"
 	"log"
 	"math/rand"
 	"net"
+	netpackage "net"
+	"net/http"
 	"os"
+	"regexp"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"time"
 
@@ -42,6 +47,7 @@ import (
 	"github.com/miekg/dns"
 	"github.com/muesli/cache2go"
 	"github.com/sirupsen/logrus"
+	"github.com/tenta-browser/tenta-dns/common"
 )
 
 const (
@@ -113,8 +119,8 @@ var (
 	targetNS             = func() *string { t := ""; return &t }()    //flag.String("ns", "", "Resolver to use in client mode")
 	targetNSName         = func() *string { t := ""; return &t }()    //flag.String("nshostname", "", "Resolver name to use in client mode")
 	certCache            = func() *string { t := ""; return &t }()    //flag.String("certcache", "", "Use the specified path for local certificate cache")
-	dnssecEnabled        = func() *bool { t := false; return &t }()   //flag.Bool("dnssec", false, "starts server in dnssec enabled mode")
-	forgivingDNSSECCheck = true
+	dnssecEnabled        = func() *bool { t := true; return &t }()    //flag.Bool("dnssec", false, "starts server in dnssec enabled mode")
+	forgivingDNSSECCheck = false
 	preferredProtocol    = "udp"
 	/// TODO -- externalize as a config directive the ips of root servers (both iana and opennic)
 	opennicRoots    = []*rootServer{&rootServer{"ns2.opennic.glue", "161.97.219.84", "2001:470:4212:10:0:100:53:1"}}
@@ -363,11 +369,10 @@ func setupDNSClient(client *dns.Client, port *string, target string, tlsCapabili
 		hostname := target
 		// hostnameAvailable := false
 		if *targetNSName == "" {
-			ip := net.ParseIP(target)
+			ip := netpackage.ParseIP(target)
 			if ip.To4() != nil {
 				PTRTarget := formatIPAddressReverse(ip)
-				targetPTR, _tw, err := retrieveCache(provider, PTRTarget+".IN-ADDR.ARPA.", dns.TypePTR)
-				tw += _tw
+				targetPTR, _, err := retrieveCache(provider, PTRTarget+".IN-ADDR.ARPA.", dns.TypePTR)
 				if err == nil {
 					if ptr, ok := targetPTR[0].(*dns.PTR); ok {
 						hostname = ptr.Ptr
@@ -382,26 +387,8 @@ func setupDNSClient(client *dns.Client, port *string, target string, tlsCapabili
 		client.Net = "tcp-tls"
 		*port = ":853"
 		hostname = strings.TrimRight(hostname, ".")
-		client.TLSConfig = &tls.Config{
-			MinVersion: tls.VersionTLS10,
-			ServerName: hostname,
-			//InsecureSkipVerify:       hostnameAvailable,
-			CurvePreferences:         []tls.CurveID{tls.CurveP521, tls.CurveP384, tls.CurveP256},
-			PreferServerCipherSuites: false,
-			/// add some cert debugging -> this is cert data save entry point (used solely for debugging now)
-			/// VerifyPeerCertificate: verifyServerCertificates,
-			CipherSuites: []uint16{
-				tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,
-				tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,
-				tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
-				tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
-				tls.TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA,
-				tls.TLS_RSA_WITH_AES_256_GCM_SHA384,
-				tls.TLS_RSA_WITH_AES_128_GCM_SHA256,
-				tls.TLS_RSA_WITH_AES_256_CBC_SHA,
-				tls.TLS_RSA_WITH_3DES_EDE_CBC_SHA,
-			},
-		}
+		client.TLSConfig = common.TLSConfigDNS()
+		client.TLSConfig.ServerName = hostname
 		needsTCP = true
 
 	} else if needsTCP {
@@ -563,14 +550,21 @@ func sliceRRtoDNSKEY(rr []dns.RR) []*dns.DNSKEY {
 }
 
 func inferCurrentLevel(queryString string, queryType uint16) string {
+	// fmt.Printf("\n\n\nDEB::INFER CURRENT LEVEL [%s]\n\n\n\n", queryString)
 	var currentLevel string
 	ending := ""
 	if dns.CountLabel(queryString) == 1 {
 		ending = "."
 	}
+
 	if queryType == dns.TypeNS {
 		if queryString != "." {
+			// trimmed := strings.TrimRight(queryString, ".")
+			// if psRet, _ := publicsuffix.PublicSuffix(trimmed); psRet == trimmed && psRet != "co.jp" {
+			// 	currentLevel = trimmed + "."
+			// } else {
 			currentLevel = strings.Join(strings.Split(queryString, ".")[1:], ".") + ending
+			// }
 		} else {
 			currentLevel = "."
 		}
@@ -578,6 +572,15 @@ func inferCurrentLevel(queryString string, queryType uint16) string {
 		currentLevel = queryString
 	}
 	return currentLevel
+}
+
+func removeOneTokenFromTheLeft(in string) string {
+	ending := ""
+	if strings.HasSuffix(in, ".") {
+		ending = "."
+	}
+
+	return strings.Join(dns.SplitDomainName(in)[1:], ".") + ending
 }
 
 /// handles one non-recursive query (object & subject) from a specified target
@@ -618,17 +621,19 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16, sugges
 		k := make([]*dns.DNSKEY, 0)
 		krr := make([]dns.RR, 0)
 		r := make([]*dns.RRSIG, 0)
+		soa := &dns.SOA{}
 
 		hasSOA := false
 		for _, aut := range dsr.Ns {
-			if _, ok := aut.(*dns.SOA); ok {
+			ok := false
+			if soa, ok = aut.(*dns.SOA); ok {
 				hasSOA = true
 				break
 			}
 		}
 
 		if len(dsr.Answer) == 0 && hasSOA {
-			currentLevel = strings.Join(strings.Split(currentLevel, ".")[1:], ".")
+			currentLevel = soa.Hdr.Name
 			q.debug("Observed SOA on DNSKEY query. Reached bottom of the stack. means current level is in fact [%s]\n", currentLevel)
 			break /// without altering the chain of trust
 		}
@@ -655,6 +660,42 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16, sugges
 		numDSMatched := 0
 		q.debug("Retrieving from cache [%s][%s][DS]\n", q.provider, object)
 		pubDS, _, e := q.retrieveCache(q.provider, currentLevel, dns.TypeDS)
+		if len(pubDS) == 0 {
+			/// we have to do an ad-hoc query for DS record.
+			/// this means: determine superior level, get cache record for NS/A, and do the effective DS query
+			superiorLevel := removeOneTokenFromTheLeft(currentLevel)
+			chNS, _, e := q.retrieveCache(q.provider, superiorLevel, dns.TypeNS)
+			if e != nil || len(chNS) == 0 {
+
+				q.debug("Cannot obtain cached value for [%s]/NS. failing\n", superiorLevel)
+				if forgivingDNSSECCheck {
+					q.setChainOfTrust(false)
+					break
+				}
+				return nil, 0, newError(errorCacheMiss, severityMajor, "cannot fetch NS records (used to query DS records, which are currently missing from cache, all done for [%s] domain) [%s]", currentLevel, e.String())
+			}
+			chNSA, _, e := q.retrieveCache(q.provider, chNS[0].(*dns.NS).Ns, dns.TypeA)
+			if e != nil || len(chNSA) == 0 {
+				q.debug("Cannot obtain cached value for [%s]/NS/A. failing\n", superiorLevel)
+				if forgivingDNSSECCheck {
+					q.setChainOfTrust(false)
+					break
+				}
+				return nil, 0, newError(errorCacheMiss, severityMajor, "cannot fetch A records (fo NSes, used to query DS records, which are currently missing from cache, all done for [%s] domain) [%s]", currentLevel, e.String())
+			}
+
+			qryDS, _, err := q.simpleResolve(currentLevel, chNSA[0].(*dns.A).A.String(), dns.TypeDS, 0)
+			if err != nil || qryDS == nil || len(qryDS.Answer) == 0 {
+				q.debug("Cannot query DS for [%s]. failing\n", currentLevel)
+				if forgivingDNSSECCheck {
+					q.setChainOfTrust(false)
+					break
+				}
+				return nil, 0, newError(errorCacheMiss, severityMajor, "cannot query [%s]/DS records (which are currently missing from cache, all done for [%s] domain) [%s]", currentLevel, currentLevel, e.String())
+			}
+
+			pubDS = qryDS.Answer
+		}
 		/// error is active only when no records are returned
 		q.debug("Got %d DS records from cache.\n", len(pubDS))
 		if e != nil {
@@ -662,6 +703,7 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16, sugges
 				q.setChainOfTrust(false)
 				break
 			}
+
 			return nil, 0, newError(errorCacheMiss, severityMajor, "cannot fetch DS records [%s]", e.String())
 		}
 		for _, rr := range pubDS {
@@ -1123,7 +1165,7 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 				reply, tw, err = q.simpleResolve(token, iteratedTargetServer, dns.TypeNS, 0)
 				q.timeWasted += tw
 				if err != nil {
-					if ind < len(finalTargetServers)-1 {
+					if ind < len(finalTargetServers)-1 { //&& err.errorCode != errorDNSSECBogus {
 						q.debug("Simpleresolve failed on primary address, falling back.\n")
 						continue
 					}
@@ -1767,11 +1809,15 @@ func (q *queryParam) doResolve(resolveTechnique int) (resultRR []dns.RR, e *dnsE
 	return resultRR, nil
 }
 
-func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime.Runtime, operatorID string) dnsHandler {
+func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime.Runtime, operatorID string) interface{} {
 
 	l := loggy
-	return func(w dns.ResponseWriter, r *dns.Msg) {
+	prepareAnswer := func(r *dns.Msg, remoteAddress net.Addr) (out *dns.Msg, err error) {
 		startTime := time.Now()
+
+		qname := r.Question[0].Name
+		qtype := r.Question[0].Qtype
+
 		rt.Stats.Count(StatsQueryTotal)
 		if network == "udp" {
 			rt.Stats.Count(StatsQueryUDP)
@@ -1784,89 +1830,119 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 		rt.Stats.Count("dns:queries:recursive")
 		rt.Stats.Tick("dns", "queries:all")
 		rt.Stats.Tick("dns", "queries:recursive")
-		rt.Stats.Card(StatsQueryUniqueIps, w.RemoteAddr().String())
 
 		// This domain was seen to be polluting the query.
 		// TODO: Configurable fast-drop blacklist
-		if strings.Contains(r.Question[0].String(), "vkcache") {
-			return
+		if strings.Contains(qname, "vkcache") {
+			return nil, fmt.Errorf("malicious activity detected")
 		}
 
 		// drop queries about `local' TLD
-		if qtok := strings.Split(r.Question[0].Name, "."); (len(qtok) > 0 && qtok[len(qtok)-1] == "local") || (len(qtok) > 1 && qtok[len(qtok)-2] == "local" && qtok[len(qtok)-1] == "") {
-			if network != "udp" {
-				w.Close()
-			}
-			return
+		if qtok := strings.Split(qname, "."); (len(qtok) > 0 && qtok[len(qtok)-1] == "local") || (len(qtok) > 1 && qtok[len(qtok)-2] == "local" && qtok[len(qtok)-1] == "") {
+			return nil, fmt.Errorf("dropping local. TLD queries")
 		}
 
 		// Check with rate limiter (and save to stats on false)
-		if network == "udp" && !w.RemoteAddr().(*net.UDPAddr).IP.IsLoopback() && !rt.RateLimiter.CountAndPass(net.ParseIP(w.RemoteAddr().String())) {
+		if network == "udp" && !remoteAddress.(*netpackage.UDPAddr).IP.IsLoopback() && !rt.RateLimiter.CountAndPass(netpackage.ParseIP(remoteAddress.String())) {
 			rt.Stats.Tick("resolver", "throttled")
-			rt.Stats.Card(StatsQueryLimitedIps, w.RemoteAddr().String())
-			return
+			return nil, fmt.Errorf("throttled")
 		}
 
 		// Don't allow ANY over UDP
-		if network == "udp" && r.Question[0].Qtype == dns.TypeANY {
-			refuseAny(w, r, rt)
+		if network == "udp" && qtype == dns.TypeANY {
+			return nil, fmt.Errorf("refusing ANY type queries")
+		}
+
+		lg := l.WithField("domain", qname)
+		var fLogger *os.File
+		if LOGGING == LOGGING_FILE {
+			fLogger, _ = os.Create(RECURSIVE_DNS_FILE_LOGGING_LOCATION + qname + "." + dns.TypeToString[qtype])
+		}
+		rrt := NewResolverRuntime(rt, lg, provider, r, 0, 0, fLogger, &nlog.EventualLogger{})
+		result, e := Resolve(rrt)
+		prePrefix := ""
+		/// debug slow queries
+		if startTime.Add(RECURSIVE_DNS_SLOW_QUERY_THRESHOLD * time.Millisecond).Before(time.Now()) {
+			prePrefix = "SLOWQUERY:"
+		}
+		if e != nil || result == nil {
+			if LOGGING == LOGGING_EVENTUALLY {
+				prefix := fmt.Sprintf("[%s%s/%s]", prePrefix, rrt.domain, dns.TypeToString[rrt.record])
+				rrt.eventualLogger.FlushExt(rrt.l, prefix)
+			}
+			result = setupResult(rrt, dns.RcodeServerFailure, nil)
+		}
+
+		if len(result.Answer) == 0 && LOGGING == LOGGING_EVENTUALLY {
+			prefix := fmt.Sprintf("[%s%s/%s]", prePrefix, rrt.domain, dns.TypeToString[rrt.record])
+			rrt.eventualLogger.FlushExt(rrt.l, prefix)
+		}
+
+		if !doWeReturnDNSSEC(rrt) && isDNSSECResponse(result) {
+			removeDNSSECRecords(result)
+
+		}
+		result.Authoritative = false
+		if result.IsEdns0() == nil {
+			result.SetEdns0(RECURSIVE_DNS_UDP_SIZE, doWeReturnDNSSEC(rrt))
+		}
+		result.RecursionAvailable = true
+		result.AuthenticatedData = doWeTouchADFlag(rrt)
+		result.Compress = true
+		return result, nil
+	}
+
+	if network == "https" {
+		return func(w http.ResponseWriter, r *http.Request) {
+			qname := r.URL.Query().Get("name")
+			qtype := uint16(0)
+			qtypeStr := r.URL.Query().Get("type")
+
+			if matchAlpha, e := regexp.MatchString("^[a-zA-Z]{1,10}$", qtypeStr); e == nil && matchAlpha {
+				qtype = dns.StringToType[qtypeStr]
+			} else if matchNum, e := regexp.MatchString("^[0-9]{1,3}$", qtypeStr); e == nil && matchNum {
+				qtypeInt, e := strconv.Atoi(qtypeStr)
+				if e != nil {
+					qtype = 0
+					l.Errorf("Invalid query arg for d'oh [TYPE=%s]", qtypeStr)
+				} else {
+					qtype = uint16(qtypeInt)
+				}
+			}
+
+			if qname == "" || qtype == 0 {
+				w.WriteHeader(400)
+				return
+			}
+			if ret, e := prepareAnswer(newDNSQuery(qname, qtype), &netpackage.TCPAddr{IP: netpackage.ParseIP(r.RemoteAddr)}); e != nil {
+				w.WriteHeader(500)
+				return
+			} else {
+				if jsonRet, err := json.Marshal(JSONFromMsg(ret)); err != nil {
+					w.WriteHeader(503)
+				} else {
+					w.Write(jsonRet)
+				}
+			}
 			return
 		}
 
-		l = l.WithField("domain", r.Question[0].Name)
-		elogger := new(nlog.EventualLogger)
-		elogger.Queuef("%v -- STARTING NEW TOPLEVEL RESOLVE FOR [%s][RecDesired - %v]", time.Now(), r.Question[0].Name, r.RecursionDesired)
-		qp := newQueryParam(r.Question[0].Name, r.Question[0].Qtype, l, elogger, provider, rt, new(ExchangeHistory))
-		qp.CDFlagSet = r.CheckingDisabled
-		resolveMethodToUse := resolveMethodRecursive
-		if r.RecursionDesired == false {
-			resolveMethodToUse = resolveMethodCacheOnly
-		}
-		qp.chainOfTrustIntact = *dnssecEnabled
-		answer, err := qp.doResolve(resolveMethodToUse)
-		resolvTime := time.Now().Sub(startTime)
-		response := new(dns.Msg)
-		if err != nil {
-			elogger.Queuef("RESOLVE RETURNED ERROR [%s]", err.String())
-			if err.errorCode != errorUnresolvable {
-				elogger.Queuef("Failed for [%s -- %d] - [%s]", qp.vanilla, qp.record, err)
-				rt.Stats.Count(StatsQueryFailure)
-				response.SetRcode(r, dns.RcodeServerFailure)
-				/// supress error messages about failed PTR lookups, and queries with RD unset
-				if r.Question[0].Qtype != dns.TypePTR && r.RecursionDesired {
-					rt.SlackWH.SendFeedback(runtime.NewPayload(operatorID, fmt.Sprintf("%s [%s/RD=%v/CD=%v]",
-						qp.vanilla, dns.TypeToString[r.Question[0].Qtype], r.RecursionDesired, r.CheckingDisabled), err.String(), ""))
-				}
-				elogger.Flush(l)
-			} else {
-				elogger.Queuef("[%s -- %d] unresolvable.", qp.vanilla, qp.record)
-				response.SetRcode(r, dns.RcodeNameError)
+	} else {
+		return func(w dns.ResponseWriter, r *dns.Msg) {
+			resp, e := prepareAnswer(r, w.RemoteAddr())
+			if e == nil {
+				w.WriteMsg(resp)
 			}
-		} else {
-			elogger.Queuef("ANSWER is: [%v][%v][%s]", resolvTime, qp.timeWasted, answer)
-			response.SetRcode(r, dns.RcodeSuccess)
+			return
 		}
-
-		elogger.Queuef("\nTransaction history:\n%s\n", qp.exchangeHistory)
-		response.RecursionAvailable = true
-		if qp.chainOfTrustIntact && qp.CDFlagSet != true {
-			response.AuthenticatedData = true
-		}
-		response.Compress = true
-		response.Answer = answer
-		response.Ns = *qp.authority
-		response.Extra = *qp.additional
-		response.SetEdns0(4096, false)
-		w.WriteMsg(response)
 	}
 }
 
 func ServeDNS(cfg runtime.RecursorConfig, rt *runtime.Runtime, v4 bool, net string, d *runtime.ServerDomain, opennicMode bool, dnssecMode bool) {
-	*dnssecEnabled = dnssecMode
 	*debugLevel = true
-	provider := "tenta"
+	provider := PROVIDER_TENTA
 	if opennicMode == true {
-		provider = "opennic"
+		provider = PROVIDER_OPENNIC
 	}
 	ip, port := hostInfo(v4, net, d)
 	addr := fmt.Sprintf("%s:%d", ip, port)
@@ -1881,7 +1957,39 @@ func ServeDNS(cfg runtime.RecursorConfig, rt *runtime.Runtime, v4 bool, net stri
 	lg.Debugf("Preparing %s dns recursor on %s", net, addr)
 
 	pchan := make(chan interface{}, 1)
-	srv := &dns.Server{Addr: addr, Net: net, NotifyStartedFunc: notifyStarted, Handler: dns.HandlerFunc(dnsRecoverWrap(handleDNSMessage(lg, provider, net, rt, operator), pchan))}
+
+	getRootTrustAnchors(rt, lg, provider)
+	go getZoneAXFR(rt, lg, provider, ".")
+
+	/// DNS over HTTPS setup
+	if net == "https" {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/dns-query", http.HandlerFunc(httpPanicWrap(handleDNSMessage(lg, provider, net, rt, operator).(func(http.ResponseWriter, *http.Request)), pchan)))
+		// mux.HandleFunc("query")
+		restDNS := &http.Server{
+			Addr:    netpackage.JoinHostPort(ip, "443"),
+			Handler: mux,
+		}
+
+		defer rt.OnFinishedOrPanic(func() {
+			restDNS.Close()
+			lg.Infof("Stopped %s dns resolver on %s", net, addr)
+			rt.SlackWH.SendMessage("shutting down.", operator)
+		}, pchan)
+		defer func() {
+			if rcv := recover(); rcv != nil {
+				snd := &StackAddedPanic{debug.Stack(), rcv}
+				fmt.Printf("Panic in ListenAndServeTLS [%s]\n", snd)
+				pchan <- snd
+			}
+		}()
+
+		go restDNS.ListenAndServeTLS(d.CertFile, d.KeyFile)
+		return
+	}
+
+	/// traditional DNS server setup from here on out
+	srv := &dns.Server{Addr: addr, Net: net, NotifyStartedFunc: notifyStarted, Handler: dns.HandlerFunc(dnsRecoverWrap(handleDNSMessage(lg, provider, net, rt, operator).(func(w dns.ResponseWriter, r *dns.Msg)), pchan))}
 	defer rt.OnFinishedOrPanic(func() {
 		srv.Shutdown()
 		lg.Infof("Stopped %s dns resolver on %s", net, addr)
@@ -1895,13 +2003,13 @@ func ServeDNS(cfg runtime.RecursorConfig, rt *runtime.Runtime, v4 bool, net stri
 		}
 	}()
 
-	if dnssecMode {
-		if e := getTrustedRootAnchors(lg, provider, rt); e != nil {
-			panic(fmt.Sprintf("Cannot obtain root trust anchors. [%v]\n", e))
-		}
-	}
+	// if dnssecMode {
+	// if e := getTrustedRootAnchors(lg, provider, rt); e != nil {
+	// 		panic(fmt.Sprintf("Cannot obtain root trust anchors. [%v]\n", e))
+	// 	}
+	// }
 
-	transferRootZone(lg, provider)
+	// transferRootZone(lg, provider)
 
 	if net == "tls" {
 		go func() {
@@ -1911,25 +2019,12 @@ func ServeDNS(cfg runtime.RecursorConfig, rt *runtime.Runtime, v4 bool, net stri
 				return
 			}
 
-			tlscfg := &tls.Config{
-				MinVersion:               tls.VersionTLS10,
-				Certificates:             []tls.Certificate{cert},
-				CurvePreferences:         []tls.CurveID{tls.CurveP521, tls.CurveP384, tls.CurveP256},
-				PreferServerCipherSuites: true,
-				CipherSuites: []uint16{
-					tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,
-					tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,
-					tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
-					tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
-					tls.TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA,
-					tls.TLS_RSA_WITH_AES_256_GCM_SHA384,
-					tls.TLS_RSA_WITH_AES_128_GCM_SHA256,
-					tls.TLS_RSA_WITH_AES_256_CBC_SHA,
-				},
-			}
+			tlscfg := common.TLSConfigDNS()
+			tlscfg.Certificates = []tls.Certificate{cert}
 
 			srv.Net = "tcp-tls"
 			srv.TLSConfig = tlscfg
+
 			if err := srv.ListenAndServe(); err != nil {
 				lg.Warnf("Failed to setup %s dns resolver on %s for %s: %s", net, addr, d.HostName, err.Error())
 			}

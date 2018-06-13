@@ -45,6 +45,7 @@ defaultdnstlsport=853
 #    netmask="24"
 
 # Lookup Credentials allow for Executing Lookups against the API
+threadedresolver=false
 [lookupcreds]
 "ABC"="123"
 "XYZ"="456"

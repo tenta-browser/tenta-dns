@@ -24,12 +24,6 @@ package director
 
 import (
 	"fmt"
-	"github.com/tenta-browser/tenta-dns/anycast"
-	"github.com/tenta-browser/tenta-dns/common"
-	"github.com/tenta-browser/tenta-dns/log"
-	"github.com/tenta-browser/tenta-dns/netinterface"
-	"github.com/tenta-browser/tenta-dns/responder"
-	"github.com/tenta-browser/tenta-dns/runtime"
 	"net"
 	"os"
 	"path/filepath"
@@ -37,6 +31,13 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/tenta-browser/tenta-dns/anycast"
+	"github.com/tenta-browser/tenta-dns/common"
+	"github.com/tenta-browser/tenta-dns/log"
+	"github.com/tenta-browser/tenta-dns/netinterface"
+	"github.com/tenta-browser/tenta-dns/responder"
+	"github.com/tenta-browser/tenta-dns/runtime"
 
 	"github.com/coreos/go-systemd/daemon"
 	"github.com/sirupsen/logrus"
@@ -96,17 +97,26 @@ func (dir *Director) doOrchestrate(systemd bool) {
 	players := make(map[string]*player)
 	interfaces := make([]common.Interface, 0)
 
+	if dir.h.MasterConfig.ThreadedResolver {
+		dir.lg.Infof("Setting resolver style as threaded")
+		responder.THREADING = responder.THREADING_NETWORK_ONLY
+	} else {
+		dir.lg.Infof("Setting resolver style as non-threaded")
+		responder.THREADING = responder.THREADING_NONE
+	}
+
 	for _, ncfg := range dir.h.NSnitchs {
 		base := filepath.Base(ncfg.ConfigFile)
 		for _, s := range domainLister(ncfg.Domains, true, true) {
 			id := fmt.Sprintf("nsnitch+%s%s", s.id, base)
+			thisCfg := ncfg
 			players[id] = newPlayer(id, failures, func(s startdata) starter {
 				return func() {
 					dir.r.AddService()
 					if s.net == "http" || s.net == "https" {
-						responder.SnitchHTTPServer(ncfg, dir.r, s.ipv4, s.net, s.d)
+						responder.SnitchHTTPServer(thisCfg, dir.r, s.ipv4, s.net, s.d)
 					} else {
-						responder.SnitchDNSServer(ncfg, dir.r, s.ipv4, s.net, s.d)
+						responder.SnitchDNSServer(thisCfg, dir.r, s.ipv4, s.net, s.d)
 					}
 				}
 			}(s), nil)
@@ -181,7 +191,7 @@ func (dir *Director) doOrchestrate(systemd bool) {
 	bgpupdates, bgpstopper, bgpwait := anycast.AdvertiseRoutes(dir.h.MasterConfig.BGP, dir.h.MasterConfig.Peers, dir.h.MasterConfig.Netblocks, interfaces)
 	statsreceiver := dir.r.Stats.AddBroadcastWatcher()
 	run := true
-	forced := false
+	forced := 0
 	for run {
 		select {
 		case <-dir.stop:
@@ -230,7 +240,7 @@ func (dir *Director) doOrchestrate(systemd bool) {
 			dir.lg.Debugf("Got BGP update %s", b.String())
 			if b.Status == anycast.RouteStatusCriticalFailure {
 				dir.lg.Errorf("Forcing shutdown due to bgp subsystem failure")
-				forced = true
+				forced = 1
 				goto stop
 			}
 			break
@@ -238,7 +248,7 @@ func (dir *Director) doOrchestrate(systemd bool) {
 			dir.lg.Debugf("Got network update %s", u.String())
 			if u.State == common.StateCriticalFailure {
 				dir.lg.Errorf("Forcing shutdown due to network subsystem failure")
-				forced = true
+				forced = 2
 				goto stop
 			}
 			if u.State == common.StateUp {
@@ -304,8 +314,9 @@ func (dir *Director) doOrchestrate(systemd bool) {
 	netwait.Wait()
 
 	dir.lg.Debug("Stopped")
-	if forced {
-		os.Exit(5)
+	if forced > 0 {
+		dir.lg.Debugf("Force Stopped (code %d)", forced)
+		os.Exit(201)
 	}
 }
 
@@ -339,6 +350,9 @@ func domainLister(doms map[string]*runtime.ServerDomain, includedns bool, includ
 				}
 				if d.DnsTlsPort != runtime.PORT_DISABLED {
 					ret = append(ret, startdata{fmt.Sprintf("dns-tls://%s:%d/", d.IPv4, d.DnsUdpPort), true, "tls", d})
+				}
+				if d.HttpsPort != runtime.PORT_DISABLED {
+					ret = append(ret, startdata{fmt.Sprintf("dns-https://%s:%d/", d.IPv4, d.DnsUdpPort), true, "https", d})
 				}
 			}
 			if includehttp {
