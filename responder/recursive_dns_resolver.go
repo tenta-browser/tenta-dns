@@ -83,6 +83,7 @@ const (
 	RESPONSE_ANSWER_REDIRECT
 	RESPONSE_ANSWER_HIDDEN
 	RESPONSE_ANSWER_ALTERNATIVE
+	RESPONSE_ANSWER_BEFORE_ASKED
 	RESPONSE_DELEGATION
 	RESPONSE_DELEGATION_GLUE
 	RESPONSE_DELEGATION_AUTHORITATIVE
@@ -101,6 +102,7 @@ var responseTypeToString = map[int]string{
 	RESPONSE_ANSWER_REDIRECT:          "answer/redirect",
 	RESPONSE_ANSWER_HIDDEN:            "lucky",
 	RESPONSE_ANSWER_ALTERNATIVE:       "answer/alternative",
+	RESPONSE_ANSWER_BEFORE_ASKED:      "answer/clairvoyant",
 	RESPONSE_DELEGATION:               "delegation",
 	RESPONSE_DELEGATION_GLUE:          "delegation/glue",
 	RESPONSE_DELEGATION_AUTHORITATIVE: "delegation/authoritative",
@@ -603,6 +605,11 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 			}
 		}
 		/// TODO: add record security check
+
+		/// alter the question to match what we are caching (for dnssec only)
+		if answerType == RESPONSE_ANSWER_BEFORE_ASKED {
+			res.Question = []dns.Question{dns.Question{strings.ToLower(rrt.domain), rrt.record, dns.ClassINET}}
+		}
 		cacheResponse(rrt, res, answerType, currentToken, source)
 		if answerType != RESPONSE_NODATA && answerType != RESPONSE_NXDOMAIN &&
 			answerType != RESPONSE_EDNS_ALLERGY && answerType != RESPONSE_THROTTLE_SUSPECT {
@@ -619,7 +626,7 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 	}
 
 	switch answerType {
-	case RESPONSE_ANSWER, RESPONSE_ANSWER_REDIRECT:
+	case RESPONSE_ANSWER, RESPONSE_ANSWER_REDIRECT, RESPONSE_ANSWER_BEFORE_ASKED:
 		LogInfo(rrt, "Got an answer. Returning it.")
 		tmp := setupResult(rrt, dns.RcodeSuccess, res)
 		return tmp, nil
@@ -886,6 +893,13 @@ func evaluateResponse(rrt *ResolverRuntime, qname string, qtype uint16, isFinal 
 				return RESPONSE_ANSWER
 			} else if rr.Header().Rrtype == dns.TypeCNAME {
 				hasCNAME = true
+			}
+		}
+
+		/// check if we have the answer to the overarching question (which is not necessarily what we asked)
+		for _, rr := range r.Answer {
+			if rr.Header().Rrtype == rrt.record && strings.ToLower(rr.Header().Name) == strings.ToLower(qname) {
+				return RESPONSE_ANSWER_BEFORE_ASKED
 			}
 		}
 
