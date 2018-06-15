@@ -1959,7 +1959,7 @@ func ServeDNS(cfg runtime.RecursorConfig, rt *runtime.Runtime, v4 bool, net stri
 	pchan := make(chan interface{}, 1)
 
 	getRootTrustAnchors(rt, lg, provider)
-	go getZoneAXFR(rt, lg, provider, ".")
+	getZoneAXFR(rt, lg, provider, ".")
 
 	/// DNS over HTTPS setup
 	if net == "https" {

@@ -41,6 +41,8 @@ const (
 	KV_TLS_CAPABILITY = "tlscap"
 	KV_TCP_PREFERENCE = "tcppref"
 	KV_EDNS_ALLERGY   = "skipedns"
+	KV_DS_RR_NUM      = "ds_rr_num"
+	KV_DNSKEY_RR_NUM  = "dnskey_rr_num"
 )
 
 const (
@@ -234,6 +236,18 @@ func (d *DNSCacheHolder) GetString(provider, key string) (string, bool) {
 		return "", false
 	}
 	return rets, true
+}
+
+func (d *DNSCacheHolder) GetInt(provider, key string) (int, bool) {
+	ret, ok := d.m[provider].k.Load(key)
+	if !ok {
+		return 0, false
+	}
+	reti, ok := ret.(int)
+	if !ok {
+		return 0, false
+	}
+	return reti, true
 }
 
 func (d *DNSCacheHolder) GetBool(provider, key string) (bool, bool) {

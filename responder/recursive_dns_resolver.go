@@ -625,6 +625,18 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 		return doQueryRecursively(rrt, _level+1)
 	}
 
+	/// save number of DS and DNSKEY records after a succesful network query (to catch and recover from partially evicted RRSETs from cache)
+	if (qtype == dns.TypeDS || qtype == dns.TypeDNSKEY) &&
+		(answerType == RESPONSE_ANSWER || answerType == RESPONSE_ANSWER_BEFORE_ASKED || answerType == RESPONSE_ANSWER_HIDDEN) {
+		records := fetchRRByType(res, qtype)
+		num := len(records)
+		if qtype == dns.TypeDS {
+			rrt.c.Put(rrt.provider, runtime.MapKey(runtime.KV_DS_RR_NUM, currentToken), int(num))
+		} else if qtype == dns.TypeDNSKEY {
+			rrt.c.Put(rrt.provider, runtime.MapKey(runtime.KV_DNSKEY_RR_NUM, currentToken), int(num))
+		}
+	}
+
 	switch answerType {
 	case RESPONSE_ANSWER, RESPONSE_ANSWER_REDIRECT, RESPONSE_ANSWER_BEFORE_ASKED:
 		LogInfo(rrt, "Got an answer. Returning it.")
@@ -1073,6 +1085,9 @@ func validateDNSSEC(rrt *ResolverRuntime, in *dns.Msg, currentZone, currentToken
 				dk.Hdr.Ttl = 20
 			}
 			rrt.c.Insert(rrt.provider, dk.Header().Name, dk, EXTRA_EMPTY)
+		}
+		if len(dks) > 0 {
+			rrt.c.Put(rrt.provider, runtime.MapKey(runtime.KV_DNSKEY_RR_NUM, dks[0].Hdr.Name), len(dks))
 		}
 		// return RR_NAVIGATOR_NEXT
 		// })
@@ -1687,7 +1702,18 @@ func fetchFromCacheOrNetwork(rrt *ResolverRuntime, zone string, record uint16) (
 			}
 			return RR_NAVIGATOR_NEXT
 		})
-		if len(ret) != 0 {
+		rrNum := len(ret)
+		ok := true
+		if record == dns.TypeDS {
+			rrNum, ok = rrt.c.GetInt(rrt.provider, runtime.MapKey(runtime.KV_DS_RR_NUM, zone))
+			LogInfo(rrt, "Trying to fetch DS from cache, we have [%v/%d] vs [%d]", ok, rrNum, len(ret))
+		} else if record == dns.TypeDNSKEY {
+			rrNum, ok = rrt.c.GetInt(rrt.provider, runtime.MapKey(runtime.KV_DNSKEY_RR_NUM, zone))
+			LogInfo(rrt, "Trying to fetch DNSKEY from cache, we have [%v/%d] vs [%d]", ok, rrNum, len(ret))
+		}
+		/// return the list only when ds/dnskey has *all* the records from cache, or any other record has a cache hit
+		/// if ds/dnskey _miss_ we are forced to requery
+		if ok && len(ret) != 0 && rrNum == len(ret) {
 			return
 		}
 	}
@@ -1912,6 +1938,13 @@ func getZoneAXFR(rt *runtime.Runtime, l *logrus.Entry, provider, zone string) er
 		return fmt.Errorf("cannot execute zone transfer [%s]", e.Error())
 	}
 	nextIteration := uint32(72 * time.Hour / time.Second)
+	/// we need to save the number of DS and DNSKEY items (to be able to validate cache hits)
+	/// but since axfr api returns them per record, we have to save it in a map
+	/// and when the cycle is complete loop through the map to save the counts
+	/// and since the same record can arrive more than once, we first get the counts from cache querying for it
+	/// and, automatically, make axfr sequential again (blocking)
+	dsNum := map[string]bool{}
+	dnskeyNum := map[string]bool{}
 	for env := range r {
 		if env.Error != nil {
 			l.Infof("Zone transfer envelope error [%s]", env.Error.Error())
@@ -1920,14 +1953,43 @@ func getZoneAXFR(rt *runtime.Runtime, l *logrus.Entry, provider, zone string) er
 		for _, rr := range env.RR {
 			switch rr.(type) {
 			case *dns.A, *dns.AAAA, *dns.NS, *dns.DS, *dns.DNSKEY:
-				if (rr.Header().Rrtype == dns.TypeDS || rr.Header().Rrtype == dns.TypeDNSKEY) &&
+				rrType := rr.Header().Rrtype
+				owner := rr.Header().Name
+				if (rrType == dns.TypeDS || rrType == dns.TypeDNSKEY) &&
 					rr.Header().Ttl > 0 && rr.Header().Ttl < nextIteration {
 					nextIteration = rr.Header().Ttl
 				}
 				rt.Cache.Insert(provider, rr.Header().Name, rr, EXTRA_EMPTY)
+
+				if rrType == dns.TypeDS {
+					dsNum[owner] = true
+				} else if rrType == dns.TypeDNSKEY {
+					dnskeyNum[owner] = true
+				}
+
 			}
 		}
 	}
+
+	for z, _ := range dsNum {
+		chRR, _ := rt.Cache.Retrieve(provider, z, dns.TypeDS, false)
+		dss, ok := chRR.([]dns.RR)
+		if !ok {
+			l.Errorf("Cannot retrieve num records for zone [%s]/DS", z)
+			continue
+		}
+		rt.Cache.Put(provider, runtime.MapKey(runtime.KV_DS_RR_NUM, z), len(dss))
+	}
+	for z, _ := range dnskeyNum {
+		chRR, _ := rt.Cache.Retrieve(provider, z, dns.TypeDNSKEY, false)
+		dnskeys, ok := chRR.([]dns.RR)
+		if !ok {
+			l.Errorf("Cannot retrieve num records for zone [%s]/DNSKEY", z)
+			continue
+		}
+		rt.Cache.Put(provider, runtime.MapKey(runtime.KV_DNSKEY_RR_NUM, z), len(dnskeys))
+	}
+
 	l.Infof("Scheduling next AXFR for zone [%s] in %d", zone, nextIteration)
 	time.AfterFunc(time.Duration(nextIteration)*time.Second, func() {
 		getZoneAXFR(rt, l, provider, zone)
