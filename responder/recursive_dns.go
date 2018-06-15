@@ -1862,20 +1862,27 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 		result, e := Resolve(rrt)
 		prePrefix := ""
 		/// debug slow queries
-		if startTime.Add(RECURSIVE_DNS_SLOW_QUERY_THRESHOLD * time.Millisecond).Before(time.Now()) {
-			prePrefix = "SLOWQUERY:"
-		}
 		if e != nil || result == nil {
 			if LOGGING == LOGGING_EVENTUALLY {
 				prefix := fmt.Sprintf("[%s%s/%s]", prePrefix, rrt.domain, dns.TypeToString[rrt.record])
 				rrt.eventualLogger.FlushExt(rrt.l, prefix)
 			}
+			rrt.f.SendMessage(fmt.Sprintf("Cannot resolve [%s/%s] on [%s]", rrt.domain, dns.TypeToString[rrt.record]), operatorID)
 			result = setupResult(rrt, dns.RcodeServerFailure, nil)
 		}
 
 		if len(result.Answer) == 0 && LOGGING == LOGGING_EVENTUALLY {
 			prefix := fmt.Sprintf("[%s%s/%s]", prePrefix, rrt.domain, dns.TypeToString[rrt.record])
 			rrt.eventualLogger.FlushExt(rrt.l, prefix)
+		}
+
+		if startTime.Add(RECURSIVE_DNS_SLOW_QUERY_THRESHOLD * time.Millisecond).Before(time.Now()) {
+			prePrefix = "SLOWQUERY:"
+			if LOGGING == LOGGING_EVENTUALLY {
+				prefix := fmt.Sprintf("[%s%s/%s]", prePrefix, rrt.domain, dns.TypeToString[rrt.record])
+				rrt.eventualLogger.FlushExt(rrt.l, prefix)
+			}
+			rrt.f.SendMessage(fmt.Sprintf("Slow query for [%s/%s] on [%s]", rrt.domain, dns.TypeToString[rrt.record]), operatorID)
 		}
 
 		if !doWeReturnDNSSEC(rrt) && isDNSSECResponse(result) {
