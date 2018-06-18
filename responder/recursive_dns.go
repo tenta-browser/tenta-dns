@@ -1867,7 +1867,9 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 				prefix := fmt.Sprintf("[%s%s/%s]", prePrefix, rrt.domain, dns.TypeToString[rrt.record])
 				rrt.eventualLogger.FlushExt(rrt.l, prefix)
 			}
-			rrt.f.SendMessage(fmt.Sprintf("Cannot resolve [%s/%s]", rrt.domain, dns.TypeToString[rrt.record]), operatorID)
+			if rrt.record == dns.TypeA {
+				rrt.f.SendMessage(fmt.Sprintf("Cannot resolve [%s/%s]", rrt.domain, dns.TypeToString[rrt.record]), operatorID)
+			}
 			result = setupResult(rrt, dns.RcodeServerFailure, nil)
 		}
 
@@ -1882,7 +1884,9 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 				prefix := fmt.Sprintf("[%s%s/%s]", prePrefix, rrt.domain, dns.TypeToString[rrt.record])
 				rrt.eventualLogger.FlushExt(rrt.l, prefix)
 			}
-			rrt.f.SendMessage(fmt.Sprintf("Slow query (%v) for [%s/%s] ", time.Now().Sub(startTime), rrt.domain, dns.TypeToString[rrt.record]), operatorID)
+			if rrt.record == dns.TypeA {
+				rrt.f.SendMessage(fmt.Sprintf("Slow query (%v) for [%s/%s] ", time.Now().Sub(startTime), rrt.domain, dns.TypeToString[rrt.record]), operatorID)
+			}
 		}
 
 		if !doWeReturnDNSSEC(rrt) && isDNSSECResponse(result) {
