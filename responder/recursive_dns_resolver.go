@@ -404,9 +404,10 @@ func Resolve(rrt *ResolverRuntime) (outgoing *dns.Msg, e error) {
 		rrt.zones = rrt.zones[:len(rrt.zones)-1]
 	}
 	LogInfo(rrt, "Checking cache for exact match...")
-	targetRR, extra := rrt.c.Retrieve(rrt.provider, rrt.domain, rrt.record, doWeReturnDNSSEC(rrt))
+	_targetRR, extra := rrt.c.Retrieve(rrt.provider, rrt.domain, rrt.record, doWeReturnDNSSEC(rrt))
 
-	if r, e, p := handleExtras(rrt, targetRR, extra); p {
+	r, e, p, targetRR := handleExtras(rrt, rrt.domain, rrt.record, _targetRR, extra)
+	if p {
 		return r, e
 	}
 
@@ -434,8 +435,9 @@ func Resolve(rrt *ResolverRuntime) (outgoing *dns.Msg, e error) {
 	zonesAsc := invertStringArray(rrt.zones)
 	for i, z := range zonesAsc {
 		/// we don't need dnssec
-		cacheResp, extra := rrt.c.Retrieve(rrt.provider, z, dns.TypeNS, false)
-		if r, e, p := handleExtras(rrt, cacheResp, extra); p {
+		_cacheResp, extra := rrt.c.Retrieve(rrt.provider, z, dns.TypeNS, false)
+		r, e, p, cacheResp := handleExtras(rrt, z, dns.TypeNS, _cacheResp, extra)
+		if p {
 			return r, e
 		}
 		if targetNS := ToNS(cacheResp); targetNS != nil {
@@ -447,8 +449,9 @@ func Resolve(rrt *ResolverRuntime) (outgoing *dns.Msg, e error) {
 			/// so for each NS record we check the cache
 			nsEntities := []*entity{}
 			for _, ns := range targetNS {
-				cacheResp, extra := rrt.c.Retrieve(rrt.provider, ns.Ns, dns.TypeA, false)
-				if r, e, p := handleExtras(rrt, cacheResp, extra); p {
+				_cacheResp, extra := rrt.c.Retrieve(rrt.provider, ns.Ns, dns.TypeA, false)
+				r, e, p, cacheResp := handleExtras(rrt, ns.Ns, dns.TypeA, _cacheResp, extra)
+				if p {
 					return r, e
 				}
 				if targetA := ToA(cacheResp); targetA != nil {
@@ -545,8 +548,9 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 	// 	qtype = rrt.record
 	// }
 	LogInfo(rrt, "CurrentZone [%s], CurrentToken [%s], isFinal [%v]", currentZone, currentToken, isFinalQuestion)
-	cachedRR, extra := rrt.c.Retrieve(rrt.provider, currentToken, qtype, doWeReturnDNSSEC(rrt))
-	if r, e, p := handleExtras(rrt, cachedRR, extra); p {
+	_cachedRR, extra := rrt.c.Retrieve(rrt.provider, currentToken, qtype, doWeReturnDNSSEC(rrt))
+	r, e, p, cachedRR := handleExtras(rrt, currentToken, qtype, _cachedRR, extra)
+	if p {
 		return r, e
 	}
 	LogInfo(rrt, "Cache request for [%s/%s] yields [%v][%v]", currentToken, dns.TypeToString[qtype], extra, cachedRR)
@@ -857,6 +861,24 @@ func cacheResponse(rrt *ResolverRuntime, in *dns.Msg, responseType int, currentT
 		return
 	}
 	if isDNSSECResponse(in) && (fetchRRByType(in, in.Question[0].Qtype) != nil || fetchRRByType(in, dns.TypeCNAME) != nil) {
+		if in.Question[0].Qtype != dns.TypeCNAME {
+			isRedirectOnly := true
+			if len(in.Answer) == 0 {
+				isRedirectOnly = false
+			}
+
+			if rrNavigator(in.Answer, func(rr dns.RR) int {
+				if rr.Header().Rrtype != dns.TypeCNAME {
+					return RR_NAVIGATOR_BREAK_AND_PROPAGATE
+				}
+				return RR_NAVIGATOR_NEXT
+			}) == RR_NAVIGATOR_BREAK_AND_PROPAGATE {
+				isRedirectOnly = false
+			}
+			if isRedirectOnly {
+				in.Question[0].Qtype = dns.TypeCNAME
+			}
+		}
 		rrt.c.InsertResponse(rrt.provider, in.Question[0].Name, in)
 	}
 
@@ -1592,11 +1614,11 @@ func cloneSection(s []dns.RR) (out []dns.RR) {
 }
 
 /// handle extras returned by cache (nxdomain or nodata)
-func handleExtras(rrt *ResolverRuntime, cacheRet interface{}, extra *runtime.ItemCacheExtra) (ret *dns.Msg, err error, propagate bool) {
+func handleExtras(rrt *ResolverRuntime, qname string, qtype uint16, cacheRet interface{}, extra *runtime.ItemCacheExtra) (ret *dns.Msg, err error, propagate bool, extendedCacheRet interface{}) {
 	// LogInfo(rrt, "Entering handleExtras() with [%v]", extra)
 	/// TODO investigate why it's nil
 	if extra == nil {
-		return nil, nil, false
+		return nil, nil, false, cacheRet
 	}
 
 	if extra.Nxdomain || extra.Nodata {
@@ -1608,15 +1630,29 @@ func handleExtras(rrt *ResolverRuntime, cacheRet interface{}, extra *runtime.Ite
 		case *dns.Msg:
 			ret := new(dns.Msg)
 			if e := copier.Copy(ret, t); e != nil {
-				return nil, fmt.Errorf("cannot deep-copy response contents from cache [%s]", e.Error()), true
+				return nil, fmt.Errorf("cannot deep-copy response contents from cache [%s]", e.Error()), true, cacheRet
 			}
-			return ret, nil, true
+			return ret, nil, true, cacheRet
 		case []dns.RR:
 			/// TODO: fetch a soa for nxdomain responses
-			return setupResult(rrt, retCode, RESPONSE_EMPTY), nil, true
+			return setupResult(rrt, retCode, RESPONSE_EMPTY), nil, true, cacheRet
+		}
+	} else if extra.Cname && len(extra.Redirect) > 0 {
+		LogInfo(rrt, "We have some hanging CNAMES we should pass along in the result.\nLike this [%v]", extra.Redirect)
+		switch cacheRet.(type) {
+		case []dns.RR:
+			for _, cn := range extra.Redirect {
+				cacheRet = append(cacheRet.([]dns.RR), cn)
+			}
+		case *dns.Msg:
+			if cacheRet.(*dns.Msg) != nil {
+				for _, cn := range extra.Redirect {
+					cacheRet.(*dns.Msg).Answer = append(cacheRet.(*dns.Msg).Answer, cn)
+				}
+			}
 		}
 	}
-	return nil, nil, false
+	return nil, nil, false, cacheRet
 }
 
 func handleTLSProbe(rrt *ResolverRuntime, server *entity) {
@@ -1740,8 +1776,9 @@ func fetchFromCacheOrNetwork(rrt *ResolverRuntime, zone string, record uint16) (
 func fetchNSAsEntity(rrt *ResolverRuntime, zone string, resolveNS, resolveA bool) (nsEntities []*entity) {
 	LogInfo(rrt, "Entering fetchNSAsENtity() with [%s]/[%v][%v]", zone, resolveNS, resolveA)
 	/// do the cache get for NS records
-	cacheRet, extra := rrt.c.Retrieve(rrt.provider, zone, dns.TypeNS, false)
-	if _, _, p := handleExtras(rrt, cacheRet, extra); p {
+	_cacheRet, extra := rrt.c.Retrieve(rrt.provider, zone, dns.TypeNS, false)
+	_, _, p, cacheRet := handleExtras(rrt, zone, dns.TypeNS, _cacheRet, extra)
+	if p {
 		/// return a generic nil
 		/// TODO: maybe add signalling for special cases like nxdomain
 		return nil
@@ -1778,8 +1815,9 @@ func fetchNSAsEntity(rrt *ResolverRuntime, zone string, resolveNS, resolveA bool
 	/// now we have NS RRs in targetNS array, try to translate them into A records
 	LogInfo(rrt, "fetchNSAsEntity: We have NS records for zone [%s]. Checking A records.", zone)
 	for _, ns := range targetNS {
-		cacheRet, extra := rrt.c.Retrieve(rrt.provider, ns.Ns, dns.TypeA, false)
-		if _, _, p := handleExtras(rrt, cacheRet, extra); p {
+		_cacheRet, extra := rrt.c.Retrieve(rrt.provider, ns.Ns, dns.TypeA, false)
+		_, _, p, cacheRet := handleExtras(rrt, ns.Ns, dns.TypeA, _cacheRet, extra)
+		if p {
 			/// don't break out just yet
 			continue
 		}

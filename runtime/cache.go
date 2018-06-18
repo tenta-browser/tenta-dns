@@ -292,9 +292,71 @@ func (d *DNSCacheHolder) InsertResponse(provider, domain string, r *dns.Msg) {
 	}
 }
 
+func isEmptyResult(res interface{}) bool {
+	switch t := res.(type) {
+	case []dns.RR:
+		return len(t) == 0
+	case *dns.Msg:
+		if t == nil {
+			return true
+		}
+		return len(t.Answer)+len(t.Ns) == 0
+	}
+	return true
+}
+
+func redirectNavigator(start string, redirects []*dns.CNAME) string {
+	for {
+		foundInCycle := false
+		for _, cn := range redirects {
+			if cn.Header().Name == start {
+				start = cn.Target
+				foundInCycle = true
+			}
+		}
+		if !foundInCycle {
+			break
+		}
+	}
+	return start
+}
+
 func (d *DNSCacheHolder) Retrieve(provider, domain string, t uint16, dnssec bool) (ret interface{}, extra *ItemCacheExtra) {
 	if c, ok := d.m[provider]; ok {
-		return c.retrieve(domain, t, dnssec)
+		r, e := c.retrieve(domain, t, dnssec)
+		// fmt.Printf("Retrieved for [%s/%s] -> [%v]\n", domain, dns.TypeToString[t], e)
+		if isEmptyResult(r) {
+			// fmt.Printf("Empty result for token [%s]. Trying CNAME.\n", domain)
+			_redirects, _ := c.retrieve(domain, dns.TypeCNAME, false)
+			redirects, ok := _redirects.([]dns.RR)
+			if ok && len(redirects) > 0 {
+				// fmt.Printf("CNAME ok for token [%s]. --> [%v]", domain, redirects)
+				tempCNAMEs := []*dns.CNAME{}
+				for _, red := range redirects {
+					if cn, ok := red.(*dns.CNAME); ok {
+						tempCNAMEs = append(tempCNAMEs, cn)
+					}
+				}
+
+				if len(tempCNAMEs) > 0 && domain != redirectNavigator(domain, tempCNAMEs) {
+					// fmt.Printf("Descending into the cache with [%s/%s]\n", redirectNavigator(domain, tempCNAMEs), dns.TypeToString[t])
+					followedRet, _followedExtra := d.Retrieve(provider, redirectNavigator(domain, tempCNAMEs), t, dnssec)
+					var followedExtra *ItemCacheExtra
+					if _followedExtra != nil {
+						followedExtra = &ItemCacheExtra{_followedExtra.Nxdomain, _followedExtra.Nodata, _followedExtra.Cname, _followedExtra.Redirect}
+					}
+					// fmt.Printf("Retrieved [%v] and adding [%v]\n", followedExtra, tempCNAMEs)
+					if followedExtra == nil {
+						followedExtra = &ItemCacheExtra{}
+					}
+					followedExtra.Cname = true
+					followedExtra.Redirect = append(followedExtra.Redirect, tempCNAMEs...)
+					// fmt.Printf("Returning with redirects [%v]\n", followedExtra.Redirect)
+					return followedRet, followedExtra
+				}
+			}
+		}
+		return r, e
 	}
 	return nil, nil
 }
@@ -363,7 +425,7 @@ func (d *DNSCache) insertInternal(_domain string, cachee opaqueCacheItem) {
 }
 
 func (d *DNSCache) retrieve(domain string, t uint16, dnssec bool) (ret interface{}, extra *ItemCacheExtra) {
-	// d.lg.Infof("Retrieving for [%s/%s/%v]", domain, dns.TypeToString[t], dnssec)
+	// fmt.Printf("Retrieving for [%s/%s/%v]\n", domain, dns.TypeToString[t], dnssec)
 	d.m.RLock()
 	dom, ok := d.l[domain]
 	if !ok {
@@ -374,14 +436,14 @@ func (d *DNSCache) retrieve(domain string, t uint16, dnssec bool) (ret interface
 	d.m.RUnlock()
 	retRegular := []dns.RR{}
 	interm := dom.l[t]
-	// d.lg.Debugf("Iterating store with size [%d]", len(interm))
+	// fmt.Printf("Iterating store with size [%d]\n", len(interm))
 	for k, v := range interm {
-		// switch cahceElemType := v.(type) {
-		// case *itemCache:
-		// 	d.lg.Debugf("We have regular [%s] -- [%v]", k, v)
-		// case *responseCache:
-		// 	d.lg.Debugf("We have DNSSEC  [%s] -- [%s]", k, cahceElemType.Question[0].String())
-		// }
+		// 	switch cahceElemType := v.(type) {
+		// 	case *itemCache:
+		// 		// fmt.Printf("We have regular [%s] -- [%v]\n", k, v)
+		// 	case *responseCache:
+		// 		// fmt.Printf("We have DNSSEC  [%s] -- [%s]\n", k, cahceElemType.Question[0].String())
+		// 	}
 
 		/// if item is queried before rounded eviction time
 		if v.timeCreated().Add(v.validity()).Before(time.Now()) {
@@ -420,7 +482,7 @@ func (d *DNSCache) retrieve(domain string, t uint16, dnssec bool) (ret interface
 				dom.m.RUnlock()
 				return retResp, nil
 			} else if !v.isDNSSECStore() {
-				// d.lg.Debugf("Returning regular cache item -- [%v]", v.(*itemCache).RR)
+				// fmt.Printf("Returning regular cache item -- [%v] with extra [%v]\n", v.(*itemCache).RR, v.(*itemCache).val)
 				// defer func(m *sync.RWMutex) {
 				// 	m.Lock()
 				// v.adjustValidity(int64(-time.Now().Sub(v.timeCreated()) / time.Second))
