@@ -321,6 +321,24 @@ func redirectNavigator(start string, redirects []*dns.CNAME) string {
 	return start
 }
 
+func containsType(in interface{}, tp uint16) bool {
+	switch t := in.(type) {
+	case []dns.RR:
+		for _, rr := range t {
+			if rr.Header().Rrtype == tp {
+				return true
+			}
+		}
+	case *dns.Msg:
+		for _, rr := range t.Answer {
+			if rr.Header().Rrtype == tp {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (d *DNSCacheHolder) Retrieve(provider, domain string, t uint16, dnssec bool) (ret interface{}, extra *ItemCacheExtra) {
 	if c, ok := d.m[provider]; ok {
 		r, e := c.retrieve(domain, t, dnssec)
@@ -352,7 +370,9 @@ func (d *DNSCacheHolder) Retrieve(provider, domain string, t uint16, dnssec bool
 					followedExtra.Cname = true
 					followedExtra.Redirect = append(followedExtra.Redirect, tempCNAMEs...)
 					// fmt.Printf("Returning with redirects [%v]\n", followedExtra.Redirect)
-					return followedRet, followedExtra
+					if containsType(followedRet, t) {
+						return followedRet, followedExtra
+					}
 				}
 			}
 		}
