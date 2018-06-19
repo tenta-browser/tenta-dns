@@ -330,9 +330,11 @@ func containsType(in interface{}, tp uint16) bool {
 			}
 		}
 	case *dns.Msg:
-		for _, rr := range t.Answer {
-			if rr.Header().Rrtype == tp {
-				return true
+		if t != nil {
+			for _, rr := range t.Answer {
+				if rr.Header().Rrtype == tp {
+					return true
+				}
 			}
 		}
 	}
