@@ -1976,6 +1976,7 @@ func ServeDNS(cfg runtime.RecursorConfig, rt *runtime.Runtime, v4 bool, net stri
 	if net == "https" {
 		mux := http.NewServeMux()
 		mux.HandleFunc("/dns-query", http.HandlerFunc(httpPanicWrap(handleDNSMessage(lg, provider, net, rt, operator).(func(http.ResponseWriter, *http.Request)), pchan)))
+		mux.HandleFunc("/tls-map", http.HandlerFunc(sketchTLSMap(rt)))
 		// mux.HandleFunc("query")
 		restDNS := &http.Server{
 			Addr:    netpackage.JoinHostPort(ip, "443"),

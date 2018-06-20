@@ -39,6 +39,7 @@ const (
 
 const (
 	KV_TLS_CAPABILITY = "tlscap"
+	KV_TLS_SUPPORTED  = "tlsok"
 	KV_TCP_PREFERENCE = "tcppref"
 	KV_EDNS_ALLERGY   = "skipedns"
 	KV_DS_RR_NUM      = "ds_rr_num"
@@ -111,6 +112,20 @@ type cleanupItem struct {
 type ItemCacheExtra struct {
 	Nxdomain, Nodata, Cname bool
 	Redirect                []*dns.CNAME
+}
+
+type TLSSupport struct {
+	Hostname string
+	Ip       string
+	Zone     string
+}
+
+func NewTLSSupportItem(hostname, ip, zone string) *TLSSupport {
+	return &TLSSupport{hostname, ip, zone}
+}
+
+func EqualTLSSupportItem(a, b *TLSSupport) bool {
+	return a.Hostname == b.Hostname && a.Ip == b.Ip
 }
 
 /*
@@ -260,6 +275,16 @@ func (d *DNSCacheHolder) GetBool(provider, key string) (bool, bool) {
 		return false, false
 	}
 	return retb, true
+}
+
+func (d *DNSCacheHolder) GetAllWithKey(provider, key string) (values []interface{}) {
+	d.m[provider].k.Range(func(k, v interface{}) bool {
+		if ks, ok := k.(string); ok && strings.HasPrefix(ks, key) {
+			values = append(values, v)
+		}
+		return true
+	})
+	return
 }
 
 /*

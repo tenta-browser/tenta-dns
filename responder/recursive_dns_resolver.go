@@ -1,6 +1,7 @@
 package responder
 
 import (
+	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"io/ioutil"
@@ -173,6 +174,10 @@ type resolverResponse struct {
 	qname    string
 	qtype    uint16
 	response *dns.Msg
+}
+
+type JSONTLSMAP struct {
+	Servers []*runtime.TLSSupport
 }
 
 var (
@@ -1689,6 +1694,7 @@ func handleTLSProbe(rrt *ResolverRuntime, server *entity) {
 	// logger.debug("DISCOVERY SUCCESS :[%s]: [%s]", target+port, reply.String())
 	LogInfo(rrt, "TLSPROBE: success for [%s]", server.String())
 	rrt.c.Put(rrt.provider, runtime.MapKey(runtime.KV_TLS_CAPABILITY, server.ip), true)
+	rrt.c.Put(rrt.provider, runtime.MapKey(runtime.KV_TLS_SUPPORTED, runtime.MapKey(hostname, server.ip)), runtime.NewTLSSupportItem(hostname, server.ip, server.zone))
 	return
 }
 
@@ -2046,6 +2052,48 @@ func getZoneAXFR(rt *runtime.Runtime, l *logrus.Entry, provider, zone string) er
 	})
 
 	return nil
+}
+
+func containsServerList(list []*runtime.TLSSupport, item *runtime.TLSSupport) bool {
+	for _, itm := range list {
+		if runtime.EqualTLSSupportItem(itm, item) {
+			return true
+		}
+	}
+	return false
+}
+
+func coalesceServerList(a, b []interface{}) (ret []*runtime.TLSSupport) {
+	for _, hld := range [][]interface{}{a, b} {
+		for _, item := range hld {
+			if server, ok := item.(*runtime.TLSSupport); ok && !containsServerList(ret, server) {
+				ret = append(ret, server)
+			}
+		}
+	}
+	return
+}
+
+func sketchTLSMap(rt *runtime.Runtime) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tlsServersO := rt.Cache.GetAllWithKey(PROVIDER_OPENNIC, runtime.KV_TLS_SUPPORTED)
+		tlsServersI := rt.Cache.GetAllWithKey(PROVIDER_TENTA, runtime.KV_TLS_SUPPORTED)
+		tlsServers := coalesceServerList(tlsServersO, tlsServersI)
+		jsonWrap := &JSONTLSMAP{tlsServers}
+		fmt.Printf("TLSMAP:: ")
+		for _, srv := range tlsServers {
+			fmt.Printf("[%s/%s]", srv.Hostname, srv.Ip)
+		}
+		fmt.Printf("\n")
+		respBytes, e := json.Marshal(jsonWrap)
+		fmt.Printf("RESP::[%s]\n", respBytes)
+		if e != nil {
+			w.Write([]byte("ERRORZ " + e.Error()))
+			return
+		}
+		w.Write(respBytes)
+
+	}
 }
 
 func LogInfo(rrt *ResolverRuntime, format string, args ...interface{}) {
