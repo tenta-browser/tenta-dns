@@ -1387,6 +1387,18 @@ func validateNSEC3(rrt *ResolverRuntime, in *dns.Msg, currentZone, currentToken 
 		if len(cnameNS) != 0 {
 			ownerToDeny = cnameNS[0].Header().Name
 		}
+	} else if responseType == RESPONSE_REDIRECT && fetchRRByType(in, dns.TypeSOA) != nil {
+		/// this is an interesting case (ex. git.torproject.org):
+		/// CNAME redirect with authority section containing an SOA + a NSEC3 covering the CNAME target
+		/// this case will probably need a stronger foundation in the future
+		redirections := []*dns.CNAME{}
+		rrNavigator(in, func(rr dns.RR) int {
+			if rr.Header().Rrtype == dns.TypeCNAME {
+				redirections = append(redirections, rr.(*dns.CNAME))
+			}
+			return RR_NAVIGATOR_NEXT
+		})
+		ownerToDeny = redirectNavigator(ownerToDeny, redirections)
 	}
 	qname := strings.Split(strings.Trim(ownerToDeny, "."), ".")
 	qtype := in.Question[0].Qtype
@@ -1456,7 +1468,7 @@ func validateNSEC3(rrt *ResolverRuntime, in *dns.Msg, currentZone, currentToken 
 			return providedClosestEncloserProof
 		}
 		return providedRecordNotAvailableProof
-	case RESPONSE_REDIRECT_GLUE:
+	case RESPONSE_REDIRECT_GLUE, RESPONSE_REDIRECT:
 		return providedRecordNotAvailableProof
 	}
 	LogInfo(rrt, "Returning, because answer type [%s] is not handled", responseTypeToString[responseType])
