@@ -1,11 +1,13 @@
 # Tenta DNS and DNS over HTTPS (DoH)
 After a lengthy iteration, we are finally launching our v2 DNS resolver, incorporating hundreds of fixes and improvements.
-Tenta DNS at its core, is about 3 things, speed, precision and privacy, this is why besides the standard tcp, and udp protocols, we support DNS-over-TLS and DNS-over-HTTPS. What we have learned from the first iteration, we perfected in this one, Tenta DNS has always-on DNSSEC validation, a more robust handling of the occasional implementation inconsistencies,
-and a caching subsystem tailored specifically for a DNS resolver, finally, our DNS-over-TLS service is active (albeit, probably unused in the vast majority of cases) during upstream queries too.
+Tenta DNS at its core, is about three things: speed, precision and privacy. This is why besides the standard TCP and UDP protocols, we support DNS-over-TLS and DNS-over-HTTPS. What we have learned from the first iteration, we perfected in this one. Tenta DNS has always-on DNSSEC validation, a more robust handling of the occasional implementation inconsistencies,
+and a caching subsystem tailored specifically for a DNS resolver. Finally, our DNS-over-TLS service is active (albeit, probably unused in the vast majority of cases) during upstream queries too.
 
-To use DNS-over-HTTPS, we have set up 2 domains, https://opennic.tenta.io/dns-query and https://iana.tenta.io/dns-query, which use OpenNIC and ICANN root servers, respectively.
-The querying works in a REST API fashion, it takes 2 arguments `name` and `type` (eg: https://opennic.tenta.io/dns-query?name=example.com&type=A) and provides an answer in JSON format.  
-We opted for a simplified JSON API approach to DoH, because it removes the difficulty of including DNS queries into lightweight applications.
+To use DNS-over-HTTPS, we have set up two domains, https://opennic.tenta.io/dns-query and https://iana.tenta.io/dns-query,  which use OpenNIC and ICANN root servers, respectively. 
+
+The querying works in a REST API fashion. It takes two arguments, `name` and `type` (eg: https://opennic.tenta.io/dns-query?name=example.com&type=A), and provides an answer in JSON format.  
+
+We opted for a simplified JSON API approach to DoH because it removes the difficulty of including DNS queries into lightweight applications.
 
 Our response format for DoH queries is as follows:  
 **Status**: integer; analogous to classic DNS message's RCODE  
