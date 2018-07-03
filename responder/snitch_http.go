@@ -24,15 +24,18 @@ package responder
 
 import (
 	"fmt"
-	"github.com/tenta-browser/tenta-dns/log"
-	handlers "github.com/tenta-browser/tenta-dns/responder/http-handlers"
-	"github.com/tenta-browser/tenta-dns/runtime"
+	"math"
 	"net/http"
 	"time"
 
+	"github.com/tenta-browser/tenta-dns/log"
+	handlers "github.com/tenta-browser/tenta-dns/responder/http-handlers"
+	"github.com/tenta-browser/tenta-dns/runtime"
+
+	"encoding/base64"
+
 	"github.com/gorilla/mux"
 	"github.com/sirupsen/logrus"
-	"encoding/base64"
 	"github.com/tenta-browser/tenta-dns/common"
 )
 
@@ -72,6 +75,19 @@ func SnitchHTTPServer(cfg runtime.NSnitchConfig, rt *runtime.Runtime, v4 bool, n
 	router.HandleFunc("/api/v1/blacklist", httpPanicWrap(handlers.HandleHTTPBLLookup(cfg, rt, lg), pchan)).Methods("GET").Host(d.HostName)
 	router.HandleFunc("/api/v1/blacklist/{foreign_ip}", httpPanicWrap(handlers.HandleHTTPBLLookup(cfg, rt, lg), pchan)).Methods("GET").Host(d.HostName)
 	router.HandleFunc("/api/v1/stats", httpPanicWrap(handlers.HandleHTTPStatsLookup(cfg, rt, lg), pchan)).Methods("GET").Host(d.HostName)
+
+	speedtestBlobs := map[int]string{0: SPEEDTEST_ONE_UNIT}
+
+	for i := 1; i <= SPEEDTEST_MAX_FILESIZE_EXPONENT; i++ {
+		/// how many times we need to append the unit string to the _previous_ element in map
+		nextCount := int(math.Pow(2.0, float64(i-1)))
+		nextElement := speedtestBlobs[i-1]
+		for j := 0; j < nextCount; j++ {
+			nextElement += SPEEDTEST_ONE_UNIT
+		}
+		speedtestBlobs[i] = nextElement
+		router.HandleFunc("/speedtest/{size_exp:[0-9]+}", httpPanicWrap(handlers.HandleHTTPSpeedtest(cfg, rt, d, speedtestBlobs, lg), pchan)).Methods("GET").Host(d.HostName)
+	}
 
 	for _, wk := range cfg.WellKnowns {
 		var b []byte
