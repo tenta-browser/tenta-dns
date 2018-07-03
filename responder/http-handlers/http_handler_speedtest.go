@@ -33,7 +33,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-func HandleHTTPSpeedtest(cfg runtime.NSnitchConfig, rt *runtime.Runtime, d *runtime.ServerDomain, content map[int]string, lgr *logrus.Entry) httpHandler {
+func HandleHTTPSpeedtest(cfg runtime.NSnitchConfig, rt *runtime.Runtime, lgr *logrus.Entry) httpHandler {
 	lg := lgr.WithField("api", "speedtest")
 	return func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
@@ -44,7 +44,7 @@ func HandleHTTPSpeedtest(cfg runtime.NSnitchConfig, rt *runtime.Runtime, d *runt
 			w.WriteHeader(400)
 			return
 		}
-		if fileInd < 0 || fileInd > 10 {
+		if fileInd < 0 || fileInd > runtime.SPEEDTEST_MAX_FILESIZE_EXPONENT {
 			lg.Errorf("Invalid file size requested [%d]", fileInd)
 			w.WriteHeader(400)
 			return
@@ -52,7 +52,7 @@ func HandleHTTPSpeedtest(cfg runtime.NSnitchConfig, rt *runtime.Runtime, d *runt
 
 		w.Header().Set("Content-Disposition", "attachment; filename=speedtest.txt")
 		w.Header().Set("Content-Type", "text/plain")
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(content[fileInd])))
-		w.Write([]byte(content[fileInd]))
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(rt.SpeedTestFiles[fileInd])))
+		w.Write([]byte(rt.SpeedTestFiles[fileInd]))
 	}
 }
