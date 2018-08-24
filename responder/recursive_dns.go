@@ -1862,13 +1862,13 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 		result, e := Resolve(rrt)
 		prePrefix := ""
 		/// debug slow queries
-		if startTime.Add(RECURSIVE_DNS_SLOW_QUERY_THRESHOLD * time.Millisecond).Before(time.Now()) {
-			prePrefix = "SLOWQUERY:"
-		}
 		if e != nil || result == nil {
 			if LOGGING == LOGGING_EVENTUALLY {
 				prefix := fmt.Sprintf("[%s%s/%s]", prePrefix, rrt.domain, dns.TypeToString[rrt.record])
 				rrt.eventualLogger.FlushExt(rrt.l, prefix)
+			}
+			if rrt.record == dns.TypeA {
+				rrt.f.SendMessage(fmt.Sprintf("Cannot resolve [%s/%s]", rrt.domain, dns.TypeToString[rrt.record]), operatorID)
 			}
 			result = setupResult(rrt, dns.RcodeServerFailure, nil)
 		}
@@ -1876,6 +1876,17 @@ func handleDNSMessage(loggy *logrus.Entry, provider, network string, rt *runtime
 		if len(result.Answer) == 0 && LOGGING == LOGGING_EVENTUALLY {
 			prefix := fmt.Sprintf("[%s%s/%s]", prePrefix, rrt.domain, dns.TypeToString[rrt.record])
 			rrt.eventualLogger.FlushExt(rrt.l, prefix)
+		}
+
+		if startTime.Add(RECURSIVE_DNS_SLOW_QUERY_THRESHOLD * time.Millisecond).Before(time.Now()) {
+			prePrefix = "SLOWQUERY:"
+			if LOGGING == LOGGING_EVENTUALLY {
+				prefix := fmt.Sprintf("[%s%s/%s]", prePrefix, rrt.domain, dns.TypeToString[rrt.record])
+				rrt.eventualLogger.FlushExt(rrt.l, prefix)
+			}
+			if rrt.record == dns.TypeA {
+				rrt.f.SendMessage(fmt.Sprintf("Slow query (%v) for [%s/%s] ", time.Now().Sub(startTime), rrt.domain, dns.TypeToString[rrt.record]), operatorID)
+			}
 		}
 
 		if !doWeReturnDNSSEC(rrt) && isDNSSECResponse(result) {
@@ -1959,12 +1970,13 @@ func ServeDNS(cfg runtime.RecursorConfig, rt *runtime.Runtime, v4 bool, net stri
 	pchan := make(chan interface{}, 1)
 
 	getRootTrustAnchors(rt, lg, provider)
-	go getZoneAXFR(rt, lg, provider, ".")
+	getZoneAXFR(rt, lg, provider, ".")
 
 	/// DNS over HTTPS setup
 	if net == "https" {
 		mux := http.NewServeMux()
 		mux.HandleFunc("/dns-query", http.HandlerFunc(httpPanicWrap(handleDNSMessage(lg, provider, net, rt, operator).(func(http.ResponseWriter, *http.Request)), pchan)))
+		mux.HandleFunc("/tls-map", http.HandlerFunc(sketchTLSMap(rt)))
 		// mux.HandleFunc("query")
 		restDNS := &http.Server{
 			Addr:    netpackage.JoinHostPort(ip, "443"),

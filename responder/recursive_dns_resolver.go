@@ -1,6 +1,7 @@
 package responder
 
 import (
+	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"io/ioutil"
@@ -83,6 +84,7 @@ const (
 	RESPONSE_ANSWER_REDIRECT
 	RESPONSE_ANSWER_HIDDEN
 	RESPONSE_ANSWER_ALTERNATIVE
+	RESPONSE_ANSWER_BEFORE_ASKED
 	RESPONSE_DELEGATION
 	RESPONSE_DELEGATION_GLUE
 	RESPONSE_DELEGATION_AUTHORITATIVE
@@ -101,6 +103,7 @@ var responseTypeToString = map[int]string{
 	RESPONSE_ANSWER_REDIRECT:          "answer/redirect",
 	RESPONSE_ANSWER_HIDDEN:            "lucky",
 	RESPONSE_ANSWER_ALTERNATIVE:       "answer/alternative",
+	RESPONSE_ANSWER_BEFORE_ASKED:      "answer/clairvoyant",
 	RESPONSE_DELEGATION:               "delegation",
 	RESPONSE_DELEGATION_GLUE:          "delegation/glue",
 	RESPONSE_DELEGATION_AUTHORITATIVE: "delegation/authoritative",
@@ -163,6 +166,7 @@ type transaction struct {
 
 type parallelQueryResult struct {
 	r *dns.Msg
+	s *entity
 	e error
 }
 
@@ -170,6 +174,10 @@ type resolverResponse struct {
 	qname    string
 	qtype    uint16
 	response *dns.Msg
+}
+
+type JSONTLSMAP struct {
+	Servers []*runtime.TLSSupport
 }
 
 var (
@@ -302,17 +310,18 @@ func resolveParallelHarness(rrt *ResolverRuntime, target []*dns.NS) (result []*e
 
 /// launches a DNS query to all available and able servers, uses the first valid answer
 /// parallelism lies in the ask all the NSes _at the same time_
-func doQueryParallelHarness(rrt *ResolverRuntime, targetServers []*entity, qname string, qtype uint16) (*dns.Msg, error) {
+func doQueryParallelHarness(rrt *ResolverRuntime, targetServers []*entity, qname string, qtype uint16) (*dns.Msg, *entity, error) {
 	LogInfo(rrt, "Entering doQueryParallelHarness() with [%s][%s] -- [%v]", qname, dns.TypeToString[qtype], targetServers)
 	serversNum := len(targetServers)
 	routinesNum := serversNum + 1
 	if serversNum == 0 {
-		return nil, fmt.Errorf("there are no configured servers")
+		return nil, nil, fmt.Errorf("there are no configured servers")
 	}
 
 	if targetServers[0].zone == "." || THREADING == THREADING_NONE || atomic.LoadUint32(&masterGoroutineNum) >= RECURSIVE_DNS_MAX_GOROUTINES {
 		tsIndex := rand.Intn(serversNum)
-		return doQuery(rrt, targetServers[tsIndex], qname, qtype)
+		ret, e := doQuery(rrt, targetServers[tsIndex], qname, qtype)
+		return ret, targetServers[tsIndex], e
 	}
 
 	wg := &sync.WaitGroup{}
@@ -332,7 +341,7 @@ func doQueryParallelHarness(rrt *ResolverRuntime, targetServers []*entity, qname
 				wg.Done()
 			}()
 			r, e := doQuery(rrt, thisEntity, qname, qtype)
-			res <- &parallelQueryResult{r, e}
+			res <- &parallelQueryResult{r, thisEntity, e}
 			if atomic.AddInt32(&routinesDone, 1) == int32(len(targetServers)) {
 				close(res)
 			}
@@ -345,17 +354,17 @@ func doQueryParallelHarness(rrt *ResolverRuntime, targetServers []*entity, qname
 			continue
 		}
 		if r.r.Rcode == dns.RcodeSuccess {
-			return r.r, r.e
+			return r.r, r.s, r.e
 		} else {
 			secondBest = r
 		}
 	}
 	/// returns last erroneous result, for future reference
 	if r != nil && r.e != nil && secondBest != nil && secondBest.e == nil {
-		return secondBest.r, secondBest.e
+		return secondBest.r, secondBest.s, secondBest.e
 	}
 
-	return r.r, r.e
+	return r.r, r.s, r.e
 
 }
 
@@ -400,9 +409,10 @@ func Resolve(rrt *ResolverRuntime) (outgoing *dns.Msg, e error) {
 		rrt.zones = rrt.zones[:len(rrt.zones)-1]
 	}
 	LogInfo(rrt, "Checking cache for exact match...")
-	targetRR, extra := rrt.c.Retrieve(rrt.provider, rrt.domain, rrt.record, doWeReturnDNSSEC(rrt))
+	_targetRR, extra := rrt.c.Retrieve(rrt.provider, rrt.domain, rrt.record, doWeReturnDNSSEC(rrt))
 
-	if r, e, p := handleExtras(rrt, targetRR, extra); p {
+	r, e, p, targetRR := handleExtras(rrt, rrt.domain, rrt.record, _targetRR, extra)
+	if p {
 		return r, e
 	}
 
@@ -430,8 +440,9 @@ func Resolve(rrt *ResolverRuntime) (outgoing *dns.Msg, e error) {
 	zonesAsc := invertStringArray(rrt.zones)
 	for i, z := range zonesAsc {
 		/// we don't need dnssec
-		cacheResp, extra := rrt.c.Retrieve(rrt.provider, z, dns.TypeNS, false)
-		if r, e, p := handleExtras(rrt, cacheResp, extra); p {
+		_cacheResp, extra := rrt.c.Retrieve(rrt.provider, z, dns.TypeNS, false)
+		r, e, p, cacheResp := handleExtras(rrt, z, dns.TypeNS, _cacheResp, extra)
+		if p {
 			return r, e
 		}
 		if targetNS := ToNS(cacheResp); targetNS != nil {
@@ -443,8 +454,9 @@ func Resolve(rrt *ResolverRuntime) (outgoing *dns.Msg, e error) {
 			/// so for each NS record we check the cache
 			nsEntities := []*entity{}
 			for _, ns := range targetNS {
-				cacheResp, extra := rrt.c.Retrieve(rrt.provider, ns.Ns, dns.TypeA, false)
-				if r, e, p := handleExtras(rrt, cacheResp, extra); p {
+				_cacheResp, extra := rrt.c.Retrieve(rrt.provider, ns.Ns, dns.TypeA, false)
+				r, e, p, cacheResp := handleExtras(rrt, ns.Ns, dns.TypeA, _cacheResp, extra)
+				if p {
 					return r, e
 				}
 				if targetA := ToA(cacheResp); targetA != nil {
@@ -541,8 +553,9 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 	// 	qtype = rrt.record
 	// }
 	LogInfo(rrt, "CurrentZone [%s], CurrentToken [%s], isFinal [%v]", currentZone, currentToken, isFinalQuestion)
-	cachedRR, extra := rrt.c.Retrieve(rrt.provider, currentToken, qtype, doWeReturnDNSSEC(rrt))
-	if r, e, p := handleExtras(rrt, cachedRR, extra); p {
+	_cachedRR, extra := rrt.c.Retrieve(rrt.provider, currentToken, qtype, doWeReturnDNSSEC(rrt))
+	r, e, p, cachedRR := handleExtras(rrt, currentToken, qtype, _cachedRR, extra)
+	if p {
 		return r, e
 	}
 	LogInfo(rrt, "Cache request for [%s/%s] yields [%v][%v]", currentToken, dns.TypeToString[qtype], extra, cachedRR)
@@ -563,7 +576,7 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 	}
 	/// at this point we know that we can't skip an rtt to the NSes
 	networkRTTStart := time.Now()
-	res, err := doQueryParallelHarness(rrt, rrt.targetServers[currentZone], currentToken, qtype)
+	res, source, err := doQueryParallelHarness(rrt, rrt.targetServers[currentZone], currentToken, qtype)
 	answerType := RESPONSE_UNKNOWN
 	/// propagate back (this means, that all NSes returned an error)
 	if err != nil {
@@ -601,7 +614,12 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 			}
 		}
 		/// TODO: add record security check
-		cacheResponse(rrt, res, answerType)
+
+		/// alter the question to match what we are caching (for dnssec only)
+		if answerType == RESPONSE_ANSWER_BEFORE_ASKED {
+			res.Question = []dns.Question{dns.Question{strings.ToLower(rrt.domain), rrt.record, dns.ClassINET}}
+		}
+		cacheResponse(rrt, res, answerType, currentToken, source)
 		if answerType != RESPONSE_NODATA && answerType != RESPONSE_NXDOMAIN &&
 			answerType != RESPONSE_EDNS_ALLERGY && answerType != RESPONSE_THROTTLE_SUSPECT {
 			rrt.currentZone = currentToken
@@ -616,8 +634,20 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 		return doQueryRecursively(rrt, _level+1)
 	}
 
+	/// save number of DS and DNSKEY records after a succesful network query (to catch and recover from partially evicted RRSETs from cache)
+	if (qtype == dns.TypeDS || qtype == dns.TypeDNSKEY) &&
+		(answerType == RESPONSE_ANSWER || answerType == RESPONSE_ANSWER_BEFORE_ASKED || answerType == RESPONSE_ANSWER_HIDDEN) {
+		records := fetchRRByType(res, qtype)
+		num := len(records)
+		if qtype == dns.TypeDS {
+			rrt.c.Put(rrt.provider, runtime.MapKey(runtime.KV_DS_RR_NUM, currentToken), int(num))
+		} else if qtype == dns.TypeDNSKEY {
+			rrt.c.Put(rrt.provider, runtime.MapKey(runtime.KV_DNSKEY_RR_NUM, currentToken), int(num))
+		}
+	}
+
 	switch answerType {
-	case RESPONSE_ANSWER, RESPONSE_ANSWER_REDIRECT:
+	case RESPONSE_ANSWER, RESPONSE_ANSWER_REDIRECT, RESPONSE_ANSWER_BEFORE_ASKED:
 		LogInfo(rrt, "Got an answer. Returning it.")
 		tmp := setupResult(rrt, dns.RcodeSuccess, res)
 		return tmp, nil
@@ -670,7 +700,10 @@ func doQueryRecursively(rrt *ResolverRuntime, _level int) (*dns.Msg, error) {
 			rrt.targetServers[currentToken] = rrt.targetServers[currentZone]
 			return doQueryRecursively(rrt, _level+1)
 		}
-		rrt.c.Insert(rrt.provider, currentToken, dns.TypeToRR[qtype](), &runtime.ItemCacheExtra{Nodata: true})
+		if fun, ok := dns.TypeToRR[qtype]; ok {
+			rrt.c.Insert(rrt.provider, currentToken, fun(), &runtime.ItemCacheExtra{Nodata: true})
+		}
+
 		if doWeReturnDNSSEC(rrt) && isDNSSECResponse(res) {
 			return setupResult(rrt, res.Rcode, res), nil
 		} else {
@@ -827,13 +860,39 @@ func cosmetizeRecords(in *dns.Msg) {
 }
 
 /// convenience func to store a response or all records from it
-func cacheResponse(rrt *ResolverRuntime, in *dns.Msg, responseType int) {
+func cacheResponse(rrt *ResolverRuntime, in *dns.Msg, responseType int, currentToken string, source *entity) {
+	isTrustedSource := isTrustedEntity(source, opennicRootServers)
+	if currentToken == "." && rrt.provider == PROVIDER_OPENNIC && !isTrustedSource {
+		return
+	}
 	if isDNSSECResponse(in) && (fetchRRByType(in, in.Question[0].Qtype) != nil || fetchRRByType(in, dns.TypeCNAME) != nil) {
+		if in.Question[0].Qtype != dns.TypeCNAME {
+			isRedirectOnly := true
+			if len(in.Answer) == 0 {
+				isRedirectOnly = false
+			}
+
+			if rrNavigator(in.Answer, func(rr dns.RR) int {
+				if rr.Header().Rrtype != dns.TypeCNAME {
+					return RR_NAVIGATOR_BREAK_AND_PROPAGATE
+				}
+				return RR_NAVIGATOR_NEXT
+			}) == RR_NAVIGATOR_BREAK_AND_PROPAGATE {
+				isRedirectOnly = false
+			}
+			if isRedirectOnly {
+				in.Question[0].Qtype = dns.TypeCNAME
+			}
+		}
 		rrt.c.InsertResponse(rrt.provider, in.Question[0].Name, in)
 	}
 
 	rrNavigator(in, func(rr dns.RR) int {
-		rrt.c.Insert(rrt.provider, rr.Header().Name, rr, EXTRA_EMPTY)
+		/// cache the record if either it's not about root level, or if it's root level and provider tenta,
+		/// or if it's root level, and opennic and is an opennic root server telling the information
+		if (rr.Header().Name == "." && ((rrt.provider == PROVIDER_OPENNIC && isTrustedSource) || (rrt.provider == PROVIDER_TENTA))) || rr.Header().Name != "." {
+			rrt.c.Insert(rrt.provider, rr.Header().Name, rr, EXTRA_EMPTY)
+		}
 		return RR_NAVIGATOR_NEXT
 	})
 
@@ -873,6 +932,13 @@ func evaluateResponse(rrt *ResolverRuntime, qname string, qtype uint16, isFinal 
 				return RESPONSE_ANSWER
 			} else if rr.Header().Rrtype == dns.TypeCNAME {
 				hasCNAME = true
+			}
+		}
+
+		/// check if we have the answer to the overarching question (which is not necessarily what we asked)
+		for _, rr := range r.Answer {
+			if rr.Header().Rrtype == rrt.record && strings.ToLower(rr.Header().Name) == strings.ToLower(qname) {
+				return RESPONSE_ANSWER_BEFORE_ASKED
 			}
 		}
 
@@ -949,6 +1015,16 @@ func evaluateResponse(rrt *ResolverRuntime, qname string, qtype uint16, isFinal 
 	}
 
 	return RESPONSE_UNKNOWN
+}
+
+/// func used to source the source of a dns message, allowing to keep opennic cache clean of iana data on root level
+func isTrustedEntity(source *entity, known []*entity) bool {
+	for _, ent := range known {
+		if ent.ip == source.ip && ent.name == source.name {
+			return true
+		}
+	}
+	return false
 }
 
 /// func used primarily (and solely) for checking whether a delegation to a sub-zone has the same servers as the parent zone
@@ -1036,6 +1112,9 @@ func validateDNSSEC(rrt *ResolverRuntime, in *dns.Msg, currentZone, currentToken
 				dk.Hdr.Ttl = 20
 			}
 			rrt.c.Insert(rrt.provider, dk.Header().Name, dk, EXTRA_EMPTY)
+		}
+		if len(dks) > 0 {
+			rrt.c.Put(rrt.provider, runtime.MapKey(runtime.KV_DNSKEY_RR_NUM, dks[0].Hdr.Name), len(dks))
 		}
 		// return RR_NAVIGATOR_NEXT
 		// })
@@ -1313,6 +1392,18 @@ func validateNSEC3(rrt *ResolverRuntime, in *dns.Msg, currentZone, currentToken 
 		if len(cnameNS) != 0 {
 			ownerToDeny = cnameNS[0].Header().Name
 		}
+	} else if responseType == RESPONSE_REDIRECT && fetchRRByType(in, dns.TypeSOA) != nil {
+		/// this is an interesting case (ex. git.torproject.org):
+		/// CNAME redirect with authority section containing an SOA + a NSEC3 covering the CNAME target
+		/// this case will probably need a stronger foundation in the future
+		redirections := []*dns.CNAME{}
+		rrNavigator(in, func(rr dns.RR) int {
+			if rr.Header().Rrtype == dns.TypeCNAME {
+				redirections = append(redirections, rr.(*dns.CNAME))
+			}
+			return RR_NAVIGATOR_NEXT
+		})
+		ownerToDeny = redirectNavigator(ownerToDeny, redirections)
 	}
 	qname := strings.Split(strings.Trim(ownerToDeny, "."), ".")
 	qtype := in.Question[0].Qtype
@@ -1382,7 +1473,7 @@ func validateNSEC3(rrt *ResolverRuntime, in *dns.Msg, currentZone, currentToken 
 			return providedClosestEncloserProof
 		}
 		return providedRecordNotAvailableProof
-	case RESPONSE_REDIRECT_GLUE:
+	case RESPONSE_REDIRECT_GLUE, RESPONSE_REDIRECT:
 		return providedRecordNotAvailableProof
 	}
 	LogInfo(rrt, "Returning, because answer type [%s] is not handled", responseTypeToString[responseType])
@@ -1540,11 +1631,11 @@ func cloneSection(s []dns.RR) (out []dns.RR) {
 }
 
 /// handle extras returned by cache (nxdomain or nodata)
-func handleExtras(rrt *ResolverRuntime, cacheRet interface{}, extra *runtime.ItemCacheExtra) (ret *dns.Msg, err error, propagate bool) {
+func handleExtras(rrt *ResolverRuntime, qname string, qtype uint16, cacheRet interface{}, extra *runtime.ItemCacheExtra) (ret *dns.Msg, err error, propagate bool, extendedCacheRet interface{}) {
 	// LogInfo(rrt, "Entering handleExtras() with [%v]", extra)
 	/// TODO investigate why it's nil
 	if extra == nil {
-		return nil, nil, false
+		return nil, nil, false, cacheRet
 	}
 
 	if extra.Nxdomain || extra.Nodata {
@@ -1556,15 +1647,29 @@ func handleExtras(rrt *ResolverRuntime, cacheRet interface{}, extra *runtime.Ite
 		case *dns.Msg:
 			ret := new(dns.Msg)
 			if e := copier.Copy(ret, t); e != nil {
-				return nil, fmt.Errorf("cannot deep-copy response contents from cache [%s]", e.Error()), true
+				return nil, fmt.Errorf("cannot deep-copy response contents from cache [%s]", e.Error()), true, cacheRet
 			}
-			return ret, nil, true
+			return ret, nil, true, cacheRet
 		case []dns.RR:
 			/// TODO: fetch a soa for nxdomain responses
-			return setupResult(rrt, retCode, RESPONSE_EMPTY), nil, true
+			return setupResult(rrt, retCode, RESPONSE_EMPTY), nil, true, cacheRet
+		}
+	} else if extra.Cname && len(extra.Redirect) > 0 {
+		LogInfo(rrt, "We have some hanging CNAMES we should pass along in the result.\nLike this [%v]", extra.Redirect)
+		switch cacheRet.(type) {
+		case []dns.RR:
+			for _, cn := range extra.Redirect {
+				cacheRet = append(cacheRet.([]dns.RR), cn)
+			}
+		case *dns.Msg:
+			if cacheRet.(*dns.Msg) != nil {
+				for _, cn := range extra.Redirect {
+					cacheRet.(*dns.Msg).Answer = append(cacheRet.(*dns.Msg).Answer, cn)
+				}
+			}
 		}
 	}
-	return nil, nil, false
+	return nil, nil, false, cacheRet
 }
 
 func handleTLSProbe(rrt *ResolverRuntime, server *entity) {
@@ -1589,6 +1694,7 @@ func handleTLSProbe(rrt *ResolverRuntime, server *entity) {
 	// logger.debug("DISCOVERY SUCCESS :[%s]: [%s]", target+port, reply.String())
 	LogInfo(rrt, "TLSPROBE: success for [%s]", server.String())
 	rrt.c.Put(rrt.provider, runtime.MapKey(runtime.KV_TLS_CAPABILITY, server.ip), true)
+	rrt.c.Put(rrt.provider, runtime.MapKey(runtime.KV_TLS_SUPPORTED, runtime.MapKey(hostname, server.ip)), runtime.NewTLSSupportItem(hostname, server.ip, server.zone))
 	return
 }
 
@@ -1650,7 +1756,18 @@ func fetchFromCacheOrNetwork(rrt *ResolverRuntime, zone string, record uint16) (
 			}
 			return RR_NAVIGATOR_NEXT
 		})
-		if len(ret) != 0 {
+		rrNum := len(ret)
+		ok := true
+		if record == dns.TypeDS {
+			rrNum, ok = rrt.c.GetInt(rrt.provider, runtime.MapKey(runtime.KV_DS_RR_NUM, zone))
+			LogInfo(rrt, "Trying to fetch DS from cache, we have [%v/%d] vs [%d]", ok, rrNum, len(ret))
+		} else if record == dns.TypeDNSKEY {
+			rrNum, ok = rrt.c.GetInt(rrt.provider, runtime.MapKey(runtime.KV_DNSKEY_RR_NUM, zone))
+			LogInfo(rrt, "Trying to fetch DNSKEY from cache, we have [%v/%d] vs [%d]", ok, rrNum, len(ret))
+		}
+		/// return the list only when ds/dnskey has *all* the records from cache, or any other record has a cache hit
+		/// if ds/dnskey _miss_ we are forced to requery
+		if ok && len(ret) != 0 && rrNum == len(ret) {
 			return
 		}
 	}
@@ -1677,8 +1794,9 @@ func fetchFromCacheOrNetwork(rrt *ResolverRuntime, zone string, record uint16) (
 func fetchNSAsEntity(rrt *ResolverRuntime, zone string, resolveNS, resolveA bool) (nsEntities []*entity) {
 	LogInfo(rrt, "Entering fetchNSAsENtity() with [%s]/[%v][%v]", zone, resolveNS, resolveA)
 	/// do the cache get for NS records
-	cacheRet, extra := rrt.c.Retrieve(rrt.provider, zone, dns.TypeNS, false)
-	if _, _, p := handleExtras(rrt, cacheRet, extra); p {
+	_cacheRet, extra := rrt.c.Retrieve(rrt.provider, zone, dns.TypeNS, false)
+	_, _, p, cacheRet := handleExtras(rrt, zone, dns.TypeNS, _cacheRet, extra)
+	if p {
 		/// return a generic nil
 		/// TODO: maybe add signalling for special cases like nxdomain
 		return nil
@@ -1715,8 +1833,9 @@ func fetchNSAsEntity(rrt *ResolverRuntime, zone string, resolveNS, resolveA bool
 	/// now we have NS RRs in targetNS array, try to translate them into A records
 	LogInfo(rrt, "fetchNSAsEntity: We have NS records for zone [%s]. Checking A records.", zone)
 	for _, ns := range targetNS {
-		cacheRet, extra := rrt.c.Retrieve(rrt.provider, ns.Ns, dns.TypeA, false)
-		if _, _, p := handleExtras(rrt, cacheRet, extra); p {
+		_cacheRet, extra := rrt.c.Retrieve(rrt.provider, ns.Ns, dns.TypeA, false)
+		_, _, p, cacheRet := handleExtras(rrt, ns.Ns, dns.TypeA, _cacheRet, extra)
+		if p {
 			/// don't break out just yet
 			continue
 		}
@@ -1859,6 +1978,10 @@ func getRootTrustAnchors(rt *runtime.Runtime, l *logrus.Entry, provider string) 
 		return RR_NAVIGATOR_NEXT
 	})
 
+	time.AfterFunc(24*time.Hour, func() {
+		getRootTrustAnchors(rt, l, provider)
+	})
+
 	return nil
 }
 
@@ -1870,7 +1993,14 @@ func getZoneAXFR(rt *runtime.Runtime, l *logrus.Entry, provider, zone string) er
 	if e != nil {
 		return fmt.Errorf("cannot execute zone transfer [%s]", e.Error())
 	}
-
+	nextIteration := uint32(72 * time.Hour / time.Second)
+	/// we need to save the number of DS and DNSKEY items (to be able to validate cache hits)
+	/// but since axfr api returns them per record, we have to save it in a map
+	/// and when the cycle is complete loop through the map to save the counts
+	/// and since the same record can arrive more than once, we first get the counts from cache querying for it
+	/// and, automatically, make axfr sequential again (blocking)
+	dsNum := map[string]bool{}
+	dnskeyNum := map[string]bool{}
 	for env := range r {
 		if env.Error != nil {
 			l.Infof("Zone transfer envelope error [%s]", env.Error.Error())
@@ -1879,13 +2009,91 @@ func getZoneAXFR(rt *runtime.Runtime, l *logrus.Entry, provider, zone string) er
 		for _, rr := range env.RR {
 			switch rr.(type) {
 			case *dns.A, *dns.AAAA, *dns.NS, *dns.DS, *dns.DNSKEY:
+				rrType := rr.Header().Rrtype
+				owner := rr.Header().Name
+				if (rrType == dns.TypeDS || rrType == dns.TypeDNSKEY) &&
+					rr.Header().Ttl > 0 && rr.Header().Ttl < nextIteration {
+					nextIteration = rr.Header().Ttl
+				}
 				rt.Cache.Insert(provider, rr.Header().Name, rr, EXTRA_EMPTY)
+
+				if rrType == dns.TypeDS {
+					dsNum[owner] = true
+				} else if rrType == dns.TypeDNSKEY {
+					dnskeyNum[owner] = true
+				}
+
 			}
 		}
-
 	}
 
+	for z, _ := range dsNum {
+		chRR, _ := rt.Cache.Retrieve(provider, z, dns.TypeDS, false)
+		dss, ok := chRR.([]dns.RR)
+		if !ok {
+			l.Errorf("Cannot retrieve num records for zone [%s]/DS", z)
+			continue
+		}
+		rt.Cache.Put(provider, runtime.MapKey(runtime.KV_DS_RR_NUM, z), len(dss))
+	}
+	for z, _ := range dnskeyNum {
+		chRR, _ := rt.Cache.Retrieve(provider, z, dns.TypeDNSKEY, false)
+		dnskeys, ok := chRR.([]dns.RR)
+		if !ok {
+			l.Errorf("Cannot retrieve num records for zone [%s]/DNSKEY", z)
+			continue
+		}
+		rt.Cache.Put(provider, runtime.MapKey(runtime.KV_DNSKEY_RR_NUM, z), len(dnskeys))
+	}
+
+	l.Infof("Scheduling next AXFR for zone [%s] in %d", zone, nextIteration)
+	time.AfterFunc(time.Duration(nextIteration)*time.Second, func() {
+		getZoneAXFR(rt, l, provider, zone)
+	})
+
 	return nil
+}
+
+func containsServerList(list []*runtime.TLSSupport, item *runtime.TLSSupport) bool {
+	for _, itm := range list {
+		if runtime.EqualTLSSupportItem(itm, item) {
+			return true
+		}
+	}
+	return false
+}
+
+func coalesceServerList(a, b []interface{}) (ret []*runtime.TLSSupport) {
+	for _, hld := range [][]interface{}{a, b} {
+		for _, item := range hld {
+			if server, ok := item.(*runtime.TLSSupport); ok && !containsServerList(ret, server) {
+				ret = append(ret, server)
+			}
+		}
+	}
+	return
+}
+
+func sketchTLSMap(rt *runtime.Runtime) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tlsServersO := rt.Cache.GetAllWithKey(PROVIDER_OPENNIC, runtime.KV_TLS_SUPPORTED)
+		tlsServersI := rt.Cache.GetAllWithKey(PROVIDER_TENTA, runtime.KV_TLS_SUPPORTED)
+		tlsServers := coalesceServerList(tlsServersO, tlsServersI)
+		jsonWrap := &JSONTLSMAP{tlsServers}
+		fmt.Printf("TLSMAP:: ")
+		for _, srv := range tlsServers {
+			fmt.Printf("[%s/%s]", srv.Hostname, srv.Ip)
+		}
+		fmt.Printf("\n")
+		respBytes, e := json.Marshal(jsonWrap)
+		fmt.Printf("RESP::[%s]\n", respBytes)
+		if e != nil {
+			w.Write([]byte("ERRORZ " + e.Error()))
+			return
+		}
+		w.Write(respBytes)
+
+	}
 }
 
 func LogInfo(rrt *ResolverRuntime, format string, args ...interface{}) {
