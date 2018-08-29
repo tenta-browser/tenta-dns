@@ -47,6 +47,7 @@ type DNSTelemetry struct {
 	RequestLoc   *GeoLocation  `json:"request_location"`
 	Subnet       *ClientSubnet `json:"client_subnet"`
 	NodeLoc      *GeoLocation  `json:"node_location"`
+	RFC4343Fail  bool          `json:"rfc4343_intolerance"`
 }
 
 type ClientSubnet struct {

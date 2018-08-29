@@ -29,6 +29,7 @@ import (
 	"net"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/tenta-browser/tenta-dns/common"
@@ -370,6 +371,12 @@ func handleSnitch(cfg runtime.NSnitchConfig, rt *runtime.Runtime, d *runtime.Ser
 			m.Answer = []dns.RR{nsIp}
 			m.Extra = []dns.RR{}
 			skipdb = true
+		}
+
+		rec.RFC4343Fail = false
+		if queried != strings.ToLower(queried) {
+			rec.RFC4343Fail = true
+			queried = strings.ToLower(queried)
 		}
 
 		// Write the DB record
