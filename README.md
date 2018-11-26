@@ -26,9 +26,9 @@ Usage
 Just want to use our hosted recursive resolver? We offer two options, using either [OpenNIC](https://opennic.org)
 root servers or the normal ICANN root servers.
 
-Our OpenNIC nameservers are at `99.192.182.100` and `66.244.159.100`
+Our OpenNIC nameservers are at `99.192.182.100` and `99.192.182.101`
 
-ICANN nameservers are at `99.192.182.200` and `66.244.159.200`
+ICANN nameservers are at `99.192.182.200` and `99.192.182.201`
 
 Please consult our [how-to page](https://tenta.com/dns-setup-guides), on setting up your DNS resolver.
 
