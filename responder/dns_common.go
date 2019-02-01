@@ -40,6 +40,22 @@ const (
 	StatsQueryUniqueIps  = "resolver:queries:remote_ips"
 )
 
+var EDNSOptions = map[uint16]bool{
+	dns.EDNS0LLQ:          true,
+	dns.EDNS0UL:           true,
+	dns.EDNS0NSID:         true,
+	dns.EDNS0DAU:          true,
+	dns.EDNS0DHU:          true,
+	dns.EDNS0N3U:          true,
+	dns.EDNS0SUBNET:       true,
+	dns.EDNS0EXPIRE:       true,
+	dns.EDNS0COOKIE:       true,
+	dns.EDNS0TCPKEEPALIVE: true,
+	dns.EDNS0PADDING:      true,
+	dns.EDNS0LOCALSTART:   true,
+	dns.EDNS0LOCALEND:     true,
+}
+
 type StackAddedPanic struct {
 	trc []byte
 	rcv interface{}
