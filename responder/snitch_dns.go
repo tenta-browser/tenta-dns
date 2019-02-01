@@ -317,6 +317,7 @@ func handleSnitch(cfg runtime.NSnitchConfig, rt *runtime.Runtime, d *runtime.Ser
 			m.SetEdns0(512, false)
 			/// check for supported EDNS version (0)
 			if opt.Version() != 0 {
+				m.SetRcode(r, dns.RcodeBadVers)
 				m.MsgHdr.Authoritative = true
 				m.Compress = true
 				m.IsEdns0().SetExtendedRcode(dns.RcodeBadVers)
