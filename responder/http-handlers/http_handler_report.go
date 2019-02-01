@@ -26,6 +26,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/tenta-browser/tenta-dns/common"
@@ -39,6 +40,10 @@ import (
 func HandleHTTPReport(cfg runtime.NSnitchConfig, rt *runtime.Runtime, d *runtime.ServerDomain, lgr *logrus.Entry) httpHandler {
 	return wrapExtendedHttpHandler(rt, lgr, "report", func(w http.ResponseWriter, r *http.Request, lg *logrus.Entry) {
 		key := []byte(fmt.Sprintf("query/%s", r.Host))
+		if r.Host != strings.ToLower(r.Host) {
+			lg.Debugf("Hostname contains uppercase %s", r.Host)
+			key = []byte(fmt.Sprintf("query/%s", strings.ToLower(r.Host)))
+		}
 
 		if !dns.IsSubDomain(d.HostName, r.Host) {
 			lg.Warnf("Handling request for invalid domain. Serving: %s, Requested: %s", d.HostName, r.Host)

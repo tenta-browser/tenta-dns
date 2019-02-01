@@ -806,7 +806,7 @@ func (q *queryParam) simpleResolve(object, target string, subject uint16, sugges
 	}
 
 	// if message is larger than generic udp packet size 512, retry on tcp
-	if err == dns.ErrTruncated {
+	if err == dns.ErrBuf {
 		q.debug("Retrying on TCP. Stay tuned.\n")
 		setupDNSClient(client, &port, target, serverCapabilityFalse, true, q.provider, q.rt)
 		reply, rtt, err = client.Exchange(message, target+port)

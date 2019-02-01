@@ -29,6 +29,7 @@ import (
 	"net"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/tenta-browser/tenta-dns/common"
@@ -310,6 +311,30 @@ func handleSnitch(cfg runtime.NSnitchConfig, rt *runtime.Runtime, d *runtime.Ser
 			}
 			skipdb = true
 		}
+		/// handle EDNS0 properly
+		if opt := r.IsEdns0(); opt != nil {
+
+			m.SetEdns0(512, false)
+			/// check for supported EDNS version (0)
+			if opt.Version() != 0 {
+				m.SetRcode(r, dns.RcodeBadVers)
+				m.MsgHdr.Authoritative = true
+				m.Compress = true
+				m.IsEdns0().SetExtendedRcode(dns.RcodeBadVers)
+				if err := w.WriteMsg(m); err != nil {
+					lgr.Errorf("Cannot write response [%s]", err.Error())
+				}
+				return
+			}
+
+			/// check for invalid EDNS0 options
+			for _, o := range opt.Option {
+
+				if EDNSOptions[o.Option()] == false {
+					lgr.Warnf("Bogus EDNS0 Option code received [%d]. Ignoring", o.Option())
+				}
+			}
+		}
 
 		switch r.Question[0].Qtype {
 		case dns.TypeANY:
@@ -370,6 +395,12 @@ func handleSnitch(cfg runtime.NSnitchConfig, rt *runtime.Runtime, d *runtime.Ser
 			m.Answer = []dns.RR{nsIp}
 			m.Extra = []dns.RR{}
 			skipdb = true
+		}
+
+		rec.RFC4343Fail = false
+		if queried != strings.ToLower(queried) {
+			rec.RFC4343Fail = true
+			queried = strings.ToLower(queried)
 		}
 
 		// Write the DB record
