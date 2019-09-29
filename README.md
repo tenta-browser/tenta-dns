@@ -4,6 +4,7 @@ Tenta DNS
 [![Build Status](https://travis-ci.org/tenta-browser/tenta-dns.svg?branch=master)](https://travis-ci.org/tenta-browser/tenta-dns)
 [![Go Report Card](https://goreportcard.com/badge/github.com/tenta-browser/tenta-dns)](https://goreportcard.com/report/github.com/tenta-browser/tenta-dns)
 [![GoDoc](https://godoc.org/github.com/tenta-browser/tenta-dns?status.svg)](https://godoc.org/github.com/tenta-browser/tenta-dns)
+[![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Ftenta-browser%2Ftenta-dns.svg?type=shield)](https://app.fossa.io/projects/git%2Bgithub.com%2Ftenta-browser%2Ftenta-dns?ref=badge_shield)
 
 ![Tenta Gopher](logo.png?raw=true "Tenta Gopher")
 
@@ -115,3 +116,6 @@ About Tenta
 ===========
 
 Tenta DNS is brought to you by Team Tenta. Tenta is your [private, encrypted browser](https://tenta.com) that protects your data instead of selling it. We're building a next-generation browser that combines all the privacy tools you need, including built-in OpenVPN. Everything is encrypted by default. That means your bookmarks, saved tabs, web history, web traffic, downloaded files, IP address and DNS. A truly incognito browser that's fast and easy.
+
+
+[![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Ftenta-browser%2Ftenta-dns.svg?type=large)](https://app.fossa.io/projects/git%2Bgithub.com%2Ftenta-browser%2Ftenta-dns?ref=badge_large)
