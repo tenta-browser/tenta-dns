@@ -28,6 +28,6 @@ fi
 
 echo "Compiling version $version"
 
-go install -ldflags "-X main.version=$version" -v github.com/tenta-browser/tenta-dns
-go install -ldflags "-X main.version=$version" -v github.com/tenta-browser/tenta-dns/stresser
-go install -ldflags "-X main.version=$version" -v github.com/tenta-browser/tenta-dns/monitor
+go build -o bin/tenta-dns -ldflags "-X main.version=$version" -v github.com/tenta-browser/tenta-dns
+go build -o bin/stresser -ldflags "-X main.version=$version" -v github.com/tenta-browser/tenta-dns/stresser
+go build -o bin/monitor -ldflags "-X main.version=$version" -v github.com/tenta-browser/tenta-dns/monitor
